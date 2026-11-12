@@ -161,10 +161,6 @@ namespace WinBins.Services
                         tasksCollection.AddObject(itemLink);
                         comObjectsToRelease.Add(itemLink);
                     }
-
-                    object sepAfterItems = CreateJumpListSeparator();
-                    tasksCollection.AddObject(sepAfterItems);
-                    comObjectsToRelease.Add(sepAfterItems);
                 }
 
                 if (items.Count >= 2 && items.Count <= 10)
@@ -180,35 +176,7 @@ namespace WinBins.Services
                         0);
                     tasksCollection.AddObject(openAllLink);
                     comObjectsToRelease.Add(openAllLink);
-
-                    object sepOpenAll = CreateJumpListSeparator();
-                    tasksCollection.AddObject(sepOpenAll);
-                    comObjectsToRelease.Add(sepOpenAll);
                 }
-
-                string addIco = EnsureGlyphJumpListIco(configService, "add_item", "\uE710");
-                object addLink = CreateJumpListLink(
-                    exePath,
-                    $"--add-item \"{bin.Id}\"",
-                    workDir,
-                    "Add item...",
-                    $"Add an app, folder, shortcut, or URL to {bin.Name}",
-                    addIco,
-                    0);
-                tasksCollection.AddObject(addLink);
-                comObjectsToRelease.Add(addLink);
-
-                string flyoutOptIco = EnsureGlyphJumpListIco(configService, "flyout_options", "\uE9E9");
-                object flyoutOptLink = CreateJumpListLink(
-                    exePath,
-                    $"--flyout-options \"{bin.Id}\"",
-                    workDir,
-                    "Flyout options...",
-                    $"Configure icon, layout, and taskbar options for {bin.Name}",
-                    flyoutOptIco,
-                    0);
-                tasksCollection.AddObject(flyoutOptLink);
-                comObjectsToRelease.Add(flyoutOptLink);
 
                 string editIco = EnsureGlyphJumpListIco(configService, "customize_bin", "\uE70F");
                 object customizeLink = CreateJumpListLink(
@@ -328,10 +296,6 @@ namespace WinBins.Services
                         tasks.AddObject(link);
                         comObjectsToRelease.Add(link);
                     }
-
-                    object sep = CreateJumpListSeparator();
-                    tasks.AddObject(sep);
-                    comObjectsToRelease.Add(sep);
                 }
 
                 string newIco = EnsureGlyphJumpListIco(configService, "add_item", "\uE710");

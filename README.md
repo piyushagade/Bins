@@ -1,6 +1,6 @@
 # Bins for Windows 11
 
-A native Windows 11 grouped taskbar icon launcher (**v1.2.0**), built with C#, WPF (WinUI 3 Dark Fluent styling), and Win32 Shell / DWM COM Interop.
+A native Windows 11 grouped taskbar icon launcher (**v1.2.1**), built with C#, WPF (WinUI 3 Dark Fluent styling), and Win32 Shell / DWM COM Interop.
 
 ## Features
 
