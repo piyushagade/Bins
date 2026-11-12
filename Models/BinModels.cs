@@ -1,0 +1,442 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Runtime.Serialization;
+
+namespace WinBins.Models
+{
+    public enum BinIconMode
+    {
+        GridMosaic = 0,
+        CustomIcon = 1
+    }
+
+    public enum BinFlyoutDensity
+    {
+        Compact = 0,
+        Normal = 1,
+        Spacious = 2
+    }
+
+    public enum BinItemKind
+    {
+        Application = 0,
+        Folder = 1,
+        Shortcut = 2,
+        FileOrUrl = 3,
+        WebUrl = 4
+    }
+
+    [DataContract]
+    public class AppConfig
+    {
+        [DataMember(Order = 1)]
+        public List<BinGroup> Bins { get; set; } = new List<BinGroup>();
+
+        [DataMember(Order = 2)]
+        public bool LaunchAtStartup { get; set; } = false;
+
+        [DataMember(Order = 3)]
+        public bool ClosePopupOnLaunch { get; set; } = true;
+
+        [DataMember(Order = 4)]
+        public bool MinimizeToTrayOnClose { get; set; } = true;
+
+        [DataMember(Order = 5)]
+        public bool HidePinToTaskbarPrompt { get; set; } = false;
+
+        [DataMember(Order = 6)]
+        public bool HideRunningAppsOnTaskbar { get; set; } = false;
+
+        public AppConfig()
+        {
+            SetFieldDefaults();
+        }
+
+        [OnDeserializing]
+        private void OnDeserializing(StreamingContext context)
+        {
+            SetFieldDefaults();
+        }
+
+        private void SetFieldDefaults()
+        {
+            Bins = new List<BinGroup>();
+            LaunchAtStartup = false;
+            ClosePopupOnLaunch = true;
+            MinimizeToTrayOnClose = true;
+            HidePinToTaskbarPrompt = false;
+            HideRunningAppsOnTaskbar = false;
+        }
+
+        public void EnsureDefaults()
+        {
+            if (Bins == null)
+            {
+                Bins = new List<BinGroup>();
+            }
+
+            foreach (var bin in Bins)
+            {
+                bin.EnsureDefaults();
+            }
+        }
+    }
+
+    [DataContract]
+    public class BinGroup
+    {
+        [DataMember(Order = 1)]
+        public string Id { get; set; }
+
+        [DataMember(Order = 2)]
+        public string Name { get; set; }
+
+        [DataMember(Order = 3)]
+        public BinIconMode IconMode { get; set; }
+
+        [DataMember(Order = 4)]
+        public string CustomIconPath { get; set; }
+
+        [DataMember(Order = 5)]
+        public int CustomIconIndex { get; set; }
+
+        [DataMember(Order = 6)]
+        public int Columns { get; set; }
+
+        [DataMember(Order = 7)]
+        public bool IsEnabledOnTaskbar { get; set; }
+
+        [DataMember(Order = 8)]
+        public int IconRevision { get; set; }
+
+        [DataMember(Order = 9)]
+        public List<BinItem> Items { get; set; }
+
+        [DataMember(Order = 10)]
+        public string FlyoutIconPath { get; set; }
+
+        [DataMember(Order = 11)]
+        public int FlyoutIconIndex { get; set; }
+
+        [DataMember(Order = 12)]
+        public int MaxRows { get; set; }
+
+        [DataMember(Order = 13)]
+        public BinFlyoutDensity Density { get; set; }
+
+        [DataMember(Order = 14)]
+        public int ItemPadding { get; set; }
+
+        [DataMember(Order = 15)]
+        public bool ShowFlyoutTitle { get; set; }
+
+        [DataMember(Order = 16)]
+        public bool ShowFlyoutAddButton { get; set; }
+
+        [DataMember(Order = 17)]
+        public bool ShowFlyoutEditButton { get; set; }
+
+        [DataMember(Order = 18)]
+        public int TaskbarOrder { get; set; }
+
+        [DataMember(Order = 19)]
+        public bool HideRunningAppsOnTaskbar { get; set; }
+
+        public BinGroup()
+        {
+            SetFieldDefaults();
+        }
+
+        [OnDeserializing]
+        private void OnDeserializing(StreamingContext context)
+        {
+            SetFieldDefaults();
+        }
+
+        private void SetFieldDefaults()
+        {
+            Id = Guid.NewGuid().ToString("N").Substring(0, 10);
+            Name = "New Bin";
+            IconMode = BinIconMode.GridMosaic;
+            CustomIconPath = string.Empty;
+            CustomIconIndex = 0;
+            Columns = 4;
+            IsEnabledOnTaskbar = true;
+            IconRevision = 1;
+            Items = new List<BinItem>();
+            FlyoutIconPath = string.Empty;
+            FlyoutIconIndex = 0;
+            MaxRows = 0; // 0 = Auto
+            Density = BinFlyoutDensity.Normal;
+            ItemPadding = 6;
+            ShowFlyoutTitle = true;
+            ShowFlyoutAddButton = true;
+            ShowFlyoutEditButton = true;
+            TaskbarOrder = int.MaxValue;
+            HideRunningAppsOnTaskbar = false;
+        }
+
+        public void EnsureDefaults()
+        {
+            if (string.IsNullOrWhiteSpace(Id))
+            {
+                Id = Guid.NewGuid().ToString("N").Substring(0, 10);
+            }
+
+            if (string.IsNullOrWhiteSpace(Name))
+            {
+                Name = "Bin";
+            }
+
+            if (Columns < 1) Columns = 1;
+            if (Columns > 10) Columns = 10;
+            if (MaxRows < 0) MaxRows = 0;
+            if (MaxRows > 12) MaxRows = 12;
+            if (ItemPadding < 0) ItemPadding = 0;
+            if (ItemPadding > 20) ItemPadding = 20;
+            if (IconRevision < 1) IconRevision = 1;
+
+            if (CustomIconPath == null) CustomIconPath = string.Empty;
+            if (FlyoutIconPath == null) FlyoutIconPath = string.Empty;
+
+            if (Items == null)
+            {
+                Items = new List<BinItem>();
+            }
+
+            foreach (var item in Items)
+            {
+                item.EnsureDefaults();
+            }
+        }
+    }
+
+    [DataContract]
+    public class BinItem
+    {
+        [DataMember(Order = 1)]
+        public string Id { get; set; } = Guid.NewGuid().ToString("N").Substring(0, 10);
+
+        [DataMember(Order = 2)]
+        public string Name { get; set; } = string.Empty;
+
+        [DataMember(Order = 3)]
+        public string TargetPath { get; set; } = string.Empty;
+
+        [DataMember(Order = 4)]
+        public string Arguments { get; set; } = string.Empty;
+
+        [DataMember(Order = 5)]
+        public string WorkingDirectory { get; set; } = string.Empty;
+
+        [DataMember(Order = 6)]
+        public string CustomIconPath { get; set; } = string.Empty;
+
+        [DataMember(Order = 7)]
+        public BinItemKind Kind { get; set; } = BinItemKind.Application;
+
+        [DataMember(Order = 8)]
+        public int CustomIconIndex { get; set; } = 0;
+
+        public BinItem()
+        {
+            SetFieldDefaults();
+        }
+
+        [OnDeserializing]
+        private void OnDeserializing(StreamingContext context)
+        {
+            SetFieldDefaults();
+        }
+
+        private void SetFieldDefaults()
+        {
+            Id = Guid.NewGuid().ToString("N").Substring(0, 10);
+            Name = string.Empty;
+            TargetPath = string.Empty;
+            Arguments = string.Empty;
+            WorkingDirectory = string.Empty;
+            CustomIconPath = string.Empty;
+            CustomIconIndex = 0;
+            Kind = BinItemKind.Application;
+        }
+
+        public void EnsureDefaults()
+        {
+            if (string.IsNullOrWhiteSpace(Id))
+            {
+                Id = Guid.NewGuid().ToString("N").Substring(0, 10);
+            }
+
+            if (CustomIconPath == null)
+            {
+                CustomIconPath = string.Empty;
+            }
+
+            if (!string.IsNullOrWhiteSpace(TargetPath) && IsWebUrl(TargetPath))
+            {
+                Kind = BinItemKind.WebUrl;
+            }
+
+            if (string.IsNullOrWhiteSpace(Name) && !string.IsNullOrWhiteSpace(TargetPath))
+            {
+                Name = DeriveDisplayName(TargetPath);
+            }
+        }
+
+        public static BinItem FromPath(string path)
+        {
+            string cleanPath = (path ?? string.Empty).Trim().Trim('"');
+            BinItemKind kind = DetectKind(cleanPath);
+            string name = DeriveDisplayName(cleanPath);
+
+            return new BinItem
+            {
+                Id = Guid.NewGuid().ToString("N").Substring(0, 10),
+                Name = name,
+                TargetPath = cleanPath,
+                Kind = kind
+            };
+        }
+
+        public static BinItem FromUrl(string normalizedUrl, string customName = null, string customIconPath = null, int customIconIndex = 0)
+        {
+            string url = (normalizedUrl ?? string.Empty).Trim();
+            string name = !string.IsNullOrWhiteSpace(customName)
+                ? customName.Trim()
+                : DeriveUrlDisplayName(url);
+
+            return new BinItem
+            {
+                Id = Guid.NewGuid().ToString("N").Substring(0, 10),
+                Name = name,
+                TargetPath = url,
+                Kind = BinItemKind.WebUrl,
+                CustomIconPath = customIconPath ?? string.Empty,
+                CustomIconIndex = customIconIndex
+            };
+        }
+
+        public static bool IsWebUrl(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return false;
+
+            string trimmed = value.Trim();
+            if (!Uri.TryCreate(trimmed, UriKind.Absolute, out Uri uri))
+                return false;
+
+            return (string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) &&
+                   !string.IsNullOrWhiteSpace(uri.Host);
+        }
+
+        public static bool TryNormalizeWebUrl(string rawInput, out string normalizedUrl)
+        {
+            normalizedUrl = null;
+            if (string.IsNullOrWhiteSpace(rawInput))
+                return false;
+
+            string candidate = rawInput.Trim();
+            if (candidate.IndexOf("://", StringComparison.Ordinal) < 0)
+            {
+                bool isLocal = candidate.StartsWith("localhost", StringComparison.OrdinalIgnoreCase) ||
+                               candidate.StartsWith("127.0.0.1", StringComparison.OrdinalIgnoreCase);
+                candidate = (isLocal ? "http://" : "https://") + candidate;
+            }
+
+            if (Uri.TryCreate(candidate, UriKind.Absolute, out Uri uri) &&
+                (string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) &&
+                !string.IsNullOrWhiteSpace(uri.Host) &&
+                (uri.Host.Contains(".") ||
+                 string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+                 uri.HostNameType == UriHostNameType.IPv4 ||
+                 uri.HostNameType == UriHostNameType.IPv6))
+            {
+                normalizedUrl = uri.AbsoluteUri;
+                return true;
+            }
+
+            return false;
+        }
+
+        public static string DeriveUrlDisplayName(string url)
+        {
+            if (Uri.TryCreate((url ?? string.Empty).Trim(), UriKind.Absolute, out Uri uri) &&
+                !string.IsNullOrWhiteSpace(uri.Host))
+            {
+                string host = uri.Host;
+                if (host.StartsWith("www.", StringComparison.OrdinalIgnoreCase) && host.Length > 4)
+                {
+                    host = host.Substring(4);
+                }
+                return host;
+            }
+
+            return "Website";
+        }
+
+        public static BinItemKind DetectKind(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return BinItemKind.FileOrUrl;
+
+            if (IsWebUrl(path))
+                return BinItemKind.WebUrl;
+
+            try
+            {
+                if (Directory.Exists(path))
+                    return BinItemKind.Folder;
+
+                string ext = Path.GetExtension(path)?.ToLowerInvariant() ?? string.Empty;
+                if (ext == ".lnk" || ext == ".url" || ext == ".appref-ms")
+                    return BinItemKind.Shortcut;
+
+                if (ext == ".exe" || ext == ".bat" || ext == ".cmd" || ext == ".msc" || ext == ".cpl")
+                    return BinItemKind.Application;
+            }
+            catch
+            {
+            }
+
+            return BinItemKind.FileOrUrl;
+        }
+
+        public static string DeriveDisplayName(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return "Item";
+
+            if (IsWebUrl(path))
+                return DeriveUrlDisplayName(path);
+
+            try
+            {
+                string trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (Directory.Exists(path))
+                {
+                    string folderName = Path.GetFileName(trimmed);
+                    return string.IsNullOrWhiteSpace(folderName) ? trimmed : folderName;
+                }
+
+                string ext = Path.GetExtension(trimmed)?.ToLowerInvariant() ?? string.Empty;
+                if (ext == ".exe" || ext == ".lnk" || ext == ".url" || ext == ".appref-ms" || ext == ".msc")
+                {
+                    string withoutExt = Path.GetFileNameWithoutExtension(trimmed);
+                    if (!string.IsNullOrWhiteSpace(withoutExt))
+                        return withoutExt;
+                }
+
+                string fileName = Path.GetFileName(trimmed);
+                return string.IsNullOrWhiteSpace(fileName) ? trimmed : fileName;
+            }
+            catch
+            {
+                return path;
+            }
+        }
+    }
+}
