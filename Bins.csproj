@@ -76,6 +76,7 @@
     <Compile Include="Services\IconService.cs" />
     <Compile Include="Services\LauncherService.cs" />
     <Compile Include="Services\ShortcutService.cs" />
+    <Compile Include="Services\JumpListService.cs" />
     <Compile Include="Services\RunningAppsTaskbarManager.cs" />
     <Compile Include="Services\TaskbarBinHostManager.cs" />
     <Compile Include="Views\FluentTheme.cs" />

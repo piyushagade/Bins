@@ -247,6 +247,9 @@ namespace WinBins.Interop
             [FieldOffset(8)]
             public IntPtr pointerValue;
 
+            [FieldOffset(8)]
+            public short boolValue;
+
             [FieldOffset(16)]
             public IntPtr reservedPadding;
 
@@ -255,6 +258,14 @@ namespace WinBins.Interop
                 var pv = new PropVariant();
                 pv.vt = 31; // VT_LPWSTR
                 pv.pointerValue = Marshal.StringToCoTaskMemUni(value ?? string.Empty);
+                return pv;
+            }
+
+            public static PropVariant FromBool(bool value)
+            {
+                var pv = new PropVariant();
+                pv.vt = 11; // VT_BOOL
+                pv.boolValue = (short)(value ? -1 : 0);
                 return pv;
             }
 
@@ -273,8 +284,12 @@ namespace WinBins.Interop
             }
         }
 
+        public static readonly PROPERTYKEY PKEY_Title =
+            new PROPERTYKEY("F29F85E0-4FF9-1068-AB91-08002B27B3D9", 2);
         public static readonly PROPERTYKEY PKEY_AppUserModel_ID =
             new PROPERTYKEY("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3", 5);
+        public static readonly PROPERTYKEY PKEY_AppUserModel_IsDestListSeparator =
+            new PROPERTYKEY("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3", 6);
         public static readonly PROPERTYKEY PKEY_AppUserModel_RelaunchCommand =
             new PROPERTYKEY("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3", 2);
         public static readonly PROPERTYKEY PKEY_AppUserModel_RelaunchIconResource =
@@ -362,6 +377,86 @@ namespace WinBins.Interop
         public static ITaskbarList CreateTaskbarList()
         {
             return (ITaskbarList)new TaskbarListCoClass();
+        }
+
+        [ComImport]
+        [Guid("92CA9DCD-5622-4BBA-A805-5E9F541BD8C9")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IObjectArray
+        {
+            [PreserveSig]
+            int GetCount(out uint pcObjects);
+            [PreserveSig]
+            int GetAt(uint uiIndex, ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out object ppv);
+        }
+
+        [ComImport]
+        [Guid("5632B1A4-E38A-400A-928A-D4CD63230295")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IObjectCollection
+        {
+            // Inherited IObjectArray vtable slots
+            [PreserveSig]
+            int GetCount(out uint pcObjects);
+            [PreserveSig]
+            int GetAt(uint uiIndex, ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out object ppv);
+
+            // IObjectCollection vtable slots
+            [PreserveSig]
+            int AddObject([MarshalAs(UnmanagedType.Interface)] object punk);
+            [PreserveSig]
+            int AddFromArray([MarshalAs(UnmanagedType.Interface)] IObjectArray poaSource);
+            [PreserveSig]
+            int RemoveObjectAt(uint uiIndex);
+            [PreserveSig]
+            int Clear();
+        }
+
+        [ComImport]
+        [Guid("2D3468C1-36A7-43B6-AC24-D3F02FD9607A")]
+        private class EnumerableObjectCollectionCoClass
+        {
+        }
+
+        [ComImport]
+        [Guid("6332DEBF-87B5-4670-90C0-5E57B408A49E")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface ICustomDestinationList
+        {
+            [PreserveSig]
+            int SetAppID([MarshalAs(UnmanagedType.LPWStr)] string pszAppID);
+            [PreserveSig]
+            int BeginList(out uint pcMinSlots, ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out IObjectArray ppv);
+            [PreserveSig]
+            int AppendCategory([MarshalAs(UnmanagedType.LPWStr)] string pszCategory, [MarshalAs(UnmanagedType.Interface)] IObjectArray poa);
+            [PreserveSig]
+            int AppendKnownCategory(int category);
+            [PreserveSig]
+            int AddUserTasks([MarshalAs(UnmanagedType.Interface)] IObjectArray poa);
+            [PreserveSig]
+            int CommitList();
+            [PreserveSig]
+            int GetRemovedDestinations(ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out IObjectArray ppv);
+            [PreserveSig]
+            int DeleteList([MarshalAs(UnmanagedType.LPWStr)] string pszAppID);
+            [PreserveSig]
+            int AbortList();
+        }
+
+        [ComImport]
+        [Guid("77F10CF0-3DB5-4966-B520-B7C54FD35ED6")]
+        private class DestinationListCoClass
+        {
+        }
+
+        public static ICustomDestinationList CreateCustomDestinationList()
+        {
+            return (ICustomDestinationList)new DestinationListCoClass();
+        }
+
+        public static IObjectCollection CreateObjectCollection()
+        {
+            return (IObjectCollection)new EnumerableObjectCollectionCoClass();
         }
 
         #endregion

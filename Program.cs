@@ -30,7 +30,7 @@ namespace WinBins
 
             Win32Interop.ClearAppStartingCursor();
             Win32Interop.GetCursorPos(out Win32Interop.POINT launchCursor);
-            ParseArgs(args, out string targetBinId, out bool startInBackground, out bool requestQuit);
+            string commandPayload = ParseArgsToPayload(args, launchCursor, out bool startInBackground, out bool requestQuit);
 
             bool createdNew;
             using (var mutex = new Mutex(true, MutexName, out createdNew))
@@ -45,12 +45,7 @@ namespace WinBins
 
                     // Grant foreground activation rights to the running Bins tray instance before signaling IPC
                     Win32Interop.AllowSetForegroundWindow(-1);
-
-                    // Forward command to running instance via Named Pipe
-                    string payload = !string.IsNullOrWhiteSpace(targetBinId)
-                        ? $"OPEN_BIN|{targetBinId}|{launchCursor.X}|{launchCursor.Y}"
-                        : "SHOW_MANAGER";
-                    SendIpcMessage(payload);
+                    SendIpcMessage(commandPayload);
                     return;
                 }
 
@@ -61,18 +56,21 @@ namespace WinBins
 
                 Win32Interop.SetCurrentProcessExplicitAppUserModelID("WinBins.Manager.App");
 
-                var app = new BinsApplication(targetBinId, startInBackground, new System.Drawing.Point(launchCursor.X, launchCursor.Y));
+                var app = new BinsApplication(commandPayload, startInBackground);
                 app.Run();
             }
         }
 
-        private static void ParseArgs(string[] args, out string targetBinId, out bool background, out bool requestQuit)
+        private static string ParseArgsToPayload(
+            string[] args,
+            Win32Interop.POINT launchCursor,
+            out bool background,
+            out bool requestQuit)
         {
-            targetBinId = null;
             background = false;
             requestQuit = false;
-            if (args == null)
-                return;
+            if (args == null || args.Length == 0)
+                return "SHOW_MANAGER";
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -81,9 +79,44 @@ namespace WinBins
                     string.Equals(a, "--open-bin", StringComparison.OrdinalIgnoreCase))
                 {
                     if (i + 1 < args.Length)
+                        return $"OPEN_BIN|{args[++i]}|{launchCursor.X}|{launchCursor.Y}";
+                }
+                else if (string.Equals(a, "--launch-item", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 2 < args.Length)
                     {
-                        targetBinId = args[++i];
+                        string binId = args[++i];
+                        string itemId = args[++i];
+                        return $"LAUNCH_ITEM|{binId}|{itemId}";
                     }
+                }
+                else if (string.Equals(a, "--open-all", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 1 < args.Length)
+                        return $"OPEN_ALL|{args[++i]}";
+                }
+                else if (string.Equals(a, "--add-item", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 1 < args.Length)
+                        return $"ADD_ITEM|{args[++i]}";
+                }
+                else if (string.Equals(a, "--flyout-options", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 1 < args.Length)
+                        return $"FLYOUT_OPTIONS|{args[++i]}";
+                }
+                else if (string.Equals(a, "--customize", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 1 < args.Length)
+                        return $"CUSTOMIZE_BIN|{args[++i]}";
+                }
+                else if (string.Equals(a, "--new-bin", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "NEW_BIN";
+                }
+                else if (string.Equals(a, "--settings", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "SHOW_SETTINGS";
                 }
                 else if (string.Equals(a, "--background", StringComparison.OrdinalIgnoreCase))
                 {
@@ -95,6 +128,8 @@ namespace WinBins
                     requestQuit = true;
                 }
             }
+
+            return background ? string.Empty : "SHOW_MANAGER";
         }
 
         private static void SendIpcMessage(string message)
@@ -120,9 +155,8 @@ namespace WinBins
     {
         private const string PipeName = @"WinBins_IPC_Pipe_v1";
 
-        private readonly string _initialBinId;
+        private readonly string _initialPayload;
         private readonly bool _startInBackground;
-        private readonly System.Drawing.Point _launchCursor;
 
         private ConfigService _configService;
         private IconService _iconService;
@@ -134,11 +168,10 @@ namespace WinBins
         private Icon _trayDrawingIcon;
         private CancellationTokenSource _ipcCts;
 
-        public BinsApplication(string initialBinId, bool startInBackground, System.Drawing.Point launchCursor)
+        public BinsApplication(string initialPayload, bool startInBackground)
         {
-            _initialBinId = initialBinId;
+            _initialPayload = initialPayload;
             _startInBackground = startInBackground;
-            _launchCursor = launchCursor;
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
             DispatcherUnhandledException += (s, e) =>
@@ -206,17 +239,9 @@ namespace WinBins
             InitializeSystemTray();
             StartIpcServer();
 
-            if (!string.IsNullOrWhiteSpace(_initialBinId))
+            if (!string.IsNullOrWhiteSpace(_initialPayload))
             {
-                BinGroup target = FindBin(_initialBinId);
-                if (target != null)
-                {
-                    _popupWindow.ShowForBin(target, _launchCursor);
-                }
-                else
-                {
-                    ShowManager(null);
-                }
+                HandleIpcCommand(_initialPayload, isInitialStartup: true);
             }
             else if (!_startInBackground)
             {
@@ -329,16 +354,18 @@ namespace WinBins
             }, token);
         }
 
-        private void HandleIpcCommand(string command)
+        private void HandleIpcCommand(string command, bool isInitialStartup = false)
         {
             string[] parts = command.Split('|');
-            if (string.Equals(parts[0], "EXIT_APP", StringComparison.OrdinalIgnoreCase))
+            string verb = parts[0] ?? string.Empty;
+
+            if (string.Equals(verb, "EXIT_APP", StringComparison.OrdinalIgnoreCase))
             {
                 ExitCleanly();
                 return;
             }
 
-            if (parts.Length >= 2 && string.Equals(parts[0], "OPEN_BIN", StringComparison.OrdinalIgnoreCase))
+            if (parts.Length >= 2 && string.Equals(verb, "OPEN_BIN", StringComparison.OrdinalIgnoreCase))
             {
                 string binId = parts[1];
                 Win32Interop.GetCursorPos(out Win32Interop.POINT fallbackPt);
@@ -348,16 +375,102 @@ namespace WinBins
                 BinGroup bin = FindBin(binId);
                 if (bin != null)
                 {
-                    _popupWindow.ToggleAtScreenPoint(bin, new System.Drawing.Point(x, y));
+                    if (isInitialStartup)
+                        _popupWindow.ShowForBin(bin, new System.Drawing.Point(x, y));
+                    else
+                        _popupWindow.ToggleAtScreenPoint(bin, new System.Drawing.Point(x, y));
                 }
                 else
                 {
                     ShowManager(null);
                 }
+                return;
+            }
+
+            if (parts.Length >= 3 && string.Equals(verb, "LAUNCH_ITEM", StringComparison.OrdinalIgnoreCase))
+            {
+                BinGroup bin = FindBin(parts[1]);
+                BinItem item = bin?.Items?.FirstOrDefault(it => string.Equals(it.Id, parts[2], StringComparison.OrdinalIgnoreCase));
+                if (item != null)
+                {
+                    _popupWindow?.HidePopup();
+                    LaunchOrActivateItem(item);
+                }
+                return;
+            }
+
+            if (parts.Length >= 2 && string.Equals(verb, "OPEN_ALL", StringComparison.OrdinalIgnoreCase))
+            {
+                BinGroup bin = FindBin(parts[1]);
+                if (bin?.Items != null)
+                {
+                    _popupWindow?.HidePopup();
+                    foreach (BinItem item in bin.Items)
+                    {
+                        LaunchOrActivateItem(item);
+                    }
+                }
+                return;
+            }
+
+            if (parts.Length >= 2 && string.Equals(verb, "ADD_ITEM", StringComparison.OrdinalIgnoreCase))
+            {
+                _popupWindow?.HidePopup();
+                BinGroup bin = FindBin(parts[1]);
+                _mainWindow?.OpenBinAndPromptAddItem(bin);
+                RebuildTrayMenu();
+                return;
+            }
+
+            if (parts.Length >= 2 && string.Equals(verb, "FLYOUT_OPTIONS", StringComparison.OrdinalIgnoreCase))
+            {
+                _popupWindow?.HidePopup();
+                BinGroup bin = FindBin(parts[1]);
+                _mainWindow?.OpenBinWithFlyoutOptions(bin);
+                RebuildTrayMenu();
+                return;
+            }
+
+            if (parts.Length >= 2 && string.Equals(verb, "CUSTOMIZE_BIN", StringComparison.OrdinalIgnoreCase))
+            {
+                _popupWindow?.HidePopup();
+                BinGroup bin = FindBin(parts[1]);
+                ShowManager(bin);
+                return;
+            }
+
+            if (string.Equals(verb, "NEW_BIN", StringComparison.OrdinalIgnoreCase))
+            {
+                _popupWindow?.HidePopup();
+                _mainWindow?.CreateAndFocusNewBin();
+                RebuildTrayMenu();
+                return;
+            }
+
+            if (string.Equals(verb, "SHOW_SETTINGS", StringComparison.OrdinalIgnoreCase))
+            {
+                _popupWindow?.HidePopup();
+                _mainWindow?.OpenSettingsPane();
+                RebuildTrayMenu();
+                return;
+            }
+
+            ShowManager(null);
+        }
+
+        private void LaunchOrActivateItem(BinItem item)
+        {
+            if (item == null)
+                return;
+
+            var liveWindows = _runningAppsManager?.GetRunningWindowsForItem(item);
+            if (liveWindows != null && liveWindows.Count > 0)
+            {
+                Win32Interop.ActivateAndRestoreWindow(liveWindows[0].Hwnd);
             }
             else
             {
-                ShowManager(null);
+                LauncherService.LaunchItem(item);
             }
         }
 

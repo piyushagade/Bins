@@ -212,6 +212,7 @@ namespace WinBins.Services
                     }
                     DestroyHost(bin.Id);
                     ShortcutService.RemoveStartMenuShortcut(bin.Id);
+                    JumpListService.DeleteBinJumpList(ShortcutService.ResolveActiveAppUserModelId(bin));
                 }
             }
 
@@ -220,6 +221,7 @@ namespace WinBins.Services
                 _configService.Save(notify: false);
             }
 
+            JumpListService.SyncManagerJumpList(_configService, _iconService);
             TaskbarPinStateChanged?.Invoke();
         }
 
@@ -231,6 +233,7 @@ namespace WinBins.Services
                 string icoPath = _iconService.EnsureBinIcoFile(bin);
                 string aumid = ShortcutService.ResolveActiveAppUserModelId(bin);
                 ShortcutService.SyncStartMenuAndPinnedShortcuts(bin, icoPath, aumid);
+                JumpListService.SyncBinJumpList(_configService, _iconService, bin, aumid);
             }
             finally
             {
@@ -318,6 +321,8 @@ namespace WinBins.Services
                 fallbackIdx++;
                 RefreshBin(bin);
             }
+
+            JumpListService.SyncManagerJumpList(_configService, _iconService);
         }
 
         public void RefreshBin(BinGroup bin)
@@ -343,6 +348,7 @@ namespace WinBins.Services
             {
                 DestroyHost(bin.Id);
                 ShortcutService.RemoveStartMenuShortcut(bin.Id);
+                JumpListService.DeleteBinJumpList(ShortcutService.ResolveActiveAppUserModelId(bin));
                 return;
             }
 
@@ -358,6 +364,7 @@ namespace WinBins.Services
                 {
                     Win32Interop.SetWindowTextW(existing.Hwnd, bin.Name ?? "Bin");
                     Win32Interop.DwmInvalidateIconicBitmaps(existing.Hwnd);
+                    JumpListService.SyncBinJumpList(_configService, _iconService, bin, existing.AppliedAumid);
                 }
             }
             else
@@ -397,6 +404,7 @@ namespace WinBins.Services
             try
             {
                 ShortcutService.SyncStartMenuAndPinnedShortcuts(bin, icoPath, stableAumid);
+                JumpListService.SyncBinJumpList(_configService, _iconService, bin, stableAumid);
             }
             finally
             {

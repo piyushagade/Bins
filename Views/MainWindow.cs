@@ -64,6 +64,7 @@ namespace WinBins.Views
         private TextBlock _binMetaSubtitle;
         private Button _addToTaskbarBtn;
         private Button _pinGuideBtn;
+        private Button _addItemsBtn;
         private TaskbarPinGuideDialog _activePinGuideDialog;
         private Border _gridSegmentBtn;
         private TextBlock _gridSegmentText;
@@ -171,9 +172,61 @@ namespace WinBins.Views
             {
                 _selectedBin = bin;
                 _activePane = WorkspacePane.Bin;
+                _flyoutOptionsExpanded = false;
             }
             RefreshFullUi();
+            ShowAndActivateWindow();
+        }
 
+        public void OpenBinWithFlyoutOptions(BinGroup bin)
+        {
+            if (bin != null)
+            {
+                _selectedBin = bin;
+                _activePane = WorkspacePane.Bin;
+            }
+            _flyoutOptionsExpanded = true;
+            RefreshFullUi();
+            ShowAndActivateWindow();
+        }
+
+        public void OpenBinAndPromptAddItem(BinGroup bin)
+        {
+            if (bin != null)
+            {
+                _selectedBin = bin;
+                _activePane = WorkspacePane.Bin;
+            }
+            _flyoutOptionsExpanded = false;
+            RefreshFullUi();
+            ShowAndActivateWindow();
+
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (_addItemsBtn != null && _selectedBin != null)
+                {
+                    AddMenuButton_Click(_addItemsBtn, null);
+                }
+            }), DispatcherPriority.Loaded);
+        }
+
+        public void OpenSettingsPane()
+        {
+            _flyoutOptionsExpanded = false;
+            _activePane = WorkspacePane.Settings;
+            RefreshFullUi();
+            ShowAndActivateWindow();
+        }
+
+        public void CreateAndFocusNewBin()
+        {
+            _flyoutOptionsExpanded = false;
+            ShowAndActivateWindow();
+            CreateNewBin_Click(null, null);
+        }
+
+        private void ShowAndActivateWindow()
+        {
             if (!IsVisible)
             {
                 Show();
@@ -181,6 +234,11 @@ namespace WinBins.Views
             if (WindowState == WindowState.Minimized)
             {
                 WindowState = WindowState.Normal;
+            }
+            IntPtr hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd != IntPtr.Zero)
+            {
+                Win32Interop.SetForegroundWindow(hwnd);
             }
             Activate();
         }
@@ -542,11 +600,11 @@ namespace WinBins.Views
             flyoutExpanderBtn.Click += (_, __) => SetFlyoutOptionsOpen(!_flyoutOptionsExpanded);
             rightControls.Children.Add(flyoutExpanderBtn);
 
-            var addBtn = FluentTheme.CreateButton("Add", padding: new Thickness(12, 0, 13, 0), iconGlyph: "\uE710");
-            addBtn.Height = 32;
-            addBtn.Margin = new Thickness(8, 0, 0, 0);
-            addBtn.Click += AddMenuButton_Click;
-            rightControls.Children.Add(addBtn);
+            _addItemsBtn = FluentTheme.CreateButton("Add", padding: new Thickness(12, 0, 13, 0), iconGlyph: "\uE710");
+            _addItemsBtn.Height = 32;
+            _addItemsBtn.Margin = new Thickness(8, 0, 0, 0);
+            _addItemsBtn.Click += AddMenuButton_Click;
+            rightControls.Children.Add(_addItemsBtn);
 
             DockPanel.SetDock(rightControls, Dock.Right);
             toolbarDock.Children.Add(rightControls);
@@ -1760,6 +1818,15 @@ namespace WinBins.Views
                     _selectedBin = bin;
                     RefreshFullUi();
                 };
+                row.MouseRightButtonUp += (s, e) =>
+                {
+                    _editingItemId = null;
+                    _activePane = WorkspacePane.Bin;
+                    _selectedBin = bin;
+                    RefreshFullUi();
+                    OpenSidebarBinContextMenu(row, bin);
+                    e.Handled = true;
+                };
 
                 _binsListPanel.Children.Add(row);
             }
@@ -1767,6 +1834,125 @@ namespace WinBins.Views
             ApplyFooterNavState(_donateNavRow, _donateNavPill, _activePane == WorkspacePane.Donate);
             ApplyFooterNavState(_settingsNavRow, _settingsNavPill, _activePane == WorkspacePane.Settings);
             ApplyFooterNavState(_aboutNavRow, _aboutNavPill, _activePane == WorkspacePane.About);
+        }
+
+        private void OpenSidebarBinContextMenu(FrameworkElement anchor, BinGroup bin)
+        {
+            if (bin == null)
+                return;
+
+            var menu = FluentTheme.CreateDarkContextMenu();
+            menu.PlacementTarget = anchor;
+            menu.Placement = PlacementMode.MousePoint;
+
+            menu.Items.Add(FluentTheme.CreateMenuItem("Preview flyout", () =>
+            {
+                _selectedBin = bin;
+                OpenPopupPreview();
+            }, iconGlyph: "\uE8A7"));
+
+            menu.Items.Add(FluentTheme.CreateMenuItem("Flyout options...", () =>
+            {
+                _selectedBin = bin;
+                _activePane = WorkspacePane.Bin;
+                SetFlyoutOptionsOpen(true);
+                RefreshFullUi();
+            }, iconGlyph: "\uE9E9"));
+
+            menu.Items.Add(FluentTheme.CreateMenuItem("Add item...", () =>
+            {
+                OpenBinAndPromptAddItem(bin);
+            }, iconGlyph: "\uE710"));
+
+            menu.Items.Add(FluentTheme.CreateMenuItem("Rename Bin", () =>
+            {
+                _selectedBin = bin;
+                _activePane = WorkspacePane.Bin;
+                _flyoutOptionsExpanded = false;
+                RefreshFullUi();
+                _binNameBox?.Focus();
+                _binNameBox?.SelectAll();
+            }, iconGlyph: "\uE70F"));
+
+            menu.Items.Add(FluentTheme.CreateMenuItem("Change taskbar icon...", () =>
+            {
+                _selectedBin = bin;
+                ChooseCustomIcon_Click(null, null);
+            }, iconGlyph: "\uEB9F"));
+
+            menu.Items.Add(FluentTheme.CreateMenuSeparator());
+
+            bool isPinned = ShortcutService.IsBinPinnedOnTaskbar(bin);
+            if (isPinned)
+            {
+                menu.Items.Add(FluentTheme.CreateMenuItem("Unpin from taskbar...", () =>
+                {
+                    ContentDialogWindow.ShowMessage(
+                        this,
+                        "Pinned on Taskbar",
+                        $"To remove \"{bin.Name}\" from the taskbar, right-click its icon on your Windows 11 Taskbar and select \"Unpin from taskbar\".",
+                        "Got it");
+                }, iconGlyph: "\uE77A"));
+            }
+            else if (bin.IsEnabledOnTaskbar)
+            {
+                menu.Items.Add(FluentTheme.CreateMenuItem("How to pin & lock position...", () =>
+                {
+                    ShowTaskbarPinGuide(bin, forceShow: true);
+                }, iconGlyph: "\uE718"));
+
+                menu.Items.Add(FluentTheme.CreateMenuItem("Remove from taskbar", () =>
+                {
+                    _selectedBin = bin;
+                    bin.IsEnabledOnTaskbar = false;
+                    SaveAndSyncSelectedBin(bumpIcon: false);
+                }, iconGlyph: "\uE77A"));
+            }
+            else
+            {
+                menu.Items.Add(FluentTheme.CreateMenuItem("Add to taskbar", () =>
+                {
+                    _selectedBin = bin;
+                    bin.IsEnabledOnTaskbar = true;
+                    SaveAndSyncSelectedBin(bumpIcon: false);
+                    ShowTaskbarPinGuide(bin, forceShow: false);
+                }, iconGlyph: "\uE718"));
+            }
+
+            string hideToggleLabel = bin.HideRunningAppsOnTaskbar
+                ? "Show open app icons on taskbar"
+                : "Hide open app icons on taskbar";
+            menu.Items.Add(FluentTheme.CreateMenuItem(hideToggleLabel, () =>
+            {
+                bin.HideRunningAppsOnTaskbar = !bin.HideRunningAppsOnTaskbar;
+                var allBins = _configService.Current?.Bins;
+                if (_configService.Current != null && allBins != null && allBins.Count > 0)
+                {
+                    if (allBins.All(b => b.HideRunningAppsOnTaskbar))
+                        _configService.Current.HideRunningAppsOnTaskbar = true;
+                    else if (allBins.All(b => !b.HideRunningAppsOnTaskbar))
+                        _configService.Current.HideRunningAppsOnTaskbar = false;
+                }
+                _configService.Save(notify: false);
+                _runningAppsManager?.SyncRunningWindows(forceReassert: bin.HideRunningAppsOnTaskbar);
+                RefreshFullUi();
+            }, iconGlyph: "\uECAA"));
+
+            menu.Items.Add(FluentTheme.CreateMenuItem("Export shortcut (.lnk)", () =>
+            {
+                _selectedBin = bin;
+                ExportShortcut_Click(null, null);
+            }, iconGlyph: "\uE8A7"));
+
+            menu.Items.Add(FluentTheme.CreateMenuSeparator());
+
+            menu.Items.Add(FluentTheme.CreateMenuItem("Delete Bin", () =>
+            {
+                _selectedBin = bin;
+                DeleteSelectedBin_Click(null, null);
+            }, isDanger: true, iconGlyph: "\uE74D"));
+
+            menu.IsOpen = true;
         }
 
         private static void ApplyFooterNavState(Border row, Border pill, bool active)
@@ -2477,6 +2663,7 @@ namespace WinBins.Views
             _activePane = WorkspacePane.Bin;
             _selectedBin = newBin;
             _configService.Save(notify: false);
+            JumpListService.SyncManagerJumpList(_configService, _iconService);
             RefreshFullUi();
 
             _binNameBox.Focus();
@@ -2506,6 +2693,7 @@ namespace WinBins.Views
             _configService.Current.Bins.Remove(toDelete);
             _selectedBin = _configService.Current.Bins.FirstOrDefault();
             _configService.Save(notify: false);
+            JumpListService.SyncManagerJumpList(_configService, _iconService);
             _runningAppsManager?.SyncRunningWindows();
             RefreshFullUi();
         }
