@@ -45,7 +45,10 @@ namespace WinBins.Views
             SourceInitialized += (_, __) =>
             {
                 IntPtr hwnd = new WindowInteropHelper(this).Handle;
-                Win32Interop.ApplyWindows11WindowStyling(hwnd, captionColorRef: 0x00202020);
+                Win32Interop.ApplyWindows11WindowStyling(
+                    hwnd,
+                    forceDarkMode: !FluentTheme.IsLightThemeActive,
+                    captionColorRef: FluentTheme.ActiveCaptionColorRef);
             };
 
             var root = new Grid { Margin = new Thickness(20, 16, 20, 18) };

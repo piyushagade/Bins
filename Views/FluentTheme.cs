@@ -1,58 +1,242 @@
 using System;
+using System.Collections.Generic;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using Microsoft.Win32;
+using WinBins.Models;
 
 namespace WinBins.Views
 {
     public static class FluentTheme
     {
+        private sealed class ThemeBrushSlot : INotifyPropertyChanged
+        {
+            private Brush _brush;
+
+            public Brush Brush
+            {
+                get => _brush;
+                set
+                {
+                    if (!ReferenceEquals(_brush, value))
+                    {
+                        _brush = value;
+                        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Brush)));
+                    }
+                }
+            }
+
+            public ThemeBrushSlot(Brush initial)
+            {
+                _brush = initial;
+            }
+
+            public event PropertyChangedEventHandler PropertyChanged;
+        }
+
+        private static readonly Dictionary<SolidColorBrush, ThemeBrushSlot> _slots =
+            new Dictionary<SolidColorBrush, ThemeBrushSlot>();
+
         public static readonly FontFamily BodyFont = new FontFamily("Segoe UI Variable Text, Segoe UI");
         public static readonly FontFamily DisplayFont = new FontFamily("Segoe UI Variable Display, Segoe UI");
         public static readonly FontFamily IconFont = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets");
 
-        // Authentic Windows 11 (WinUI 3 Dark) Neutral Palette
-        public static readonly SolidColorBrush ShellBg = BrushFromHex("#202020");
-        public static readonly SolidColorBrush WindowBg = BrushFromHex("#202020");
-        public static readonly SolidColorBrush SidebarBg = BrushFromHex("#202020");
-        public static readonly SolidColorBrush LayerBg = BrushFromHex("#272727");
-        public static readonly SolidColorBrush PopupBg = BrushFromHex("#2C2C2C");
-        public static readonly SolidColorBrush FlyoutBg = BrushFromHex("#2C2C2C");
+        // Mutable SolidColorBrushes for direct FrameworkElement properties + paired ThemeBrushSlots for ControlTemplates/Styles
+        public static readonly SolidColorBrush ShellBg = RegisterThemeBrush("#202020");
+        public static readonly SolidColorBrush WindowBg = RegisterThemeBrush("#202020");
+        public static readonly SolidColorBrush SidebarBg = RegisterThemeBrush("#202020");
+        public static readonly SolidColorBrush LayerBg = RegisterThemeBrush("#272727");
+        public static readonly SolidColorBrush PopupBg = RegisterThemeBrush("#2C2C2C");
+        public static readonly SolidColorBrush FlyoutBg = RegisterThemeBrush("#2C2C2C");
 
-        public static readonly SolidColorBrush CardBg = BrushFromHex("#0DFFFFFF");
-        public static readonly SolidColorBrush CardHoverBg = BrushFromHex("#15FFFFFF");
-        public static readonly SolidColorBrush CardSelectedBg = BrushFromHex("#18FFFFFF");
-        public static readonly SolidColorBrush SubtleHoverBg = BrushFromHex("#12FFFFFF");
-        public static readonly SolidColorBrush SubtlePressedBg = BrushFromHex("#0AFFFFFF");
-        public static readonly SolidColorBrush InputBg = BrushFromHex("#12FFFFFF");
-        public static readonly SolidColorBrush SegmentedTrackBg = BrushFromHex("#191919");
+        public static readonly SolidColorBrush CardBg = RegisterThemeBrush("#0DFFFFFF");
+        public static readonly SolidColorBrush CardHoverBg = RegisterThemeBrush("#15FFFFFF");
+        public static readonly SolidColorBrush CardSelectedBg = RegisterThemeBrush("#18FFFFFF");
+        public static readonly SolidColorBrush SubtleHoverBg = RegisterThemeBrush("#12FFFFFF");
+        public static readonly SolidColorBrush SubtlePressedBg = RegisterThemeBrush("#0AFFFFFF");
+        public static readonly SolidColorBrush InputBg = RegisterThemeBrush("#12FFFFFF");
+        public static readonly SolidColorBrush SegmentedTrackBg = RegisterThemeBrush("#191919");
 
-        public static readonly SolidColorBrush SurfaceStroke = BrushFromHex("#14FFFFFF");
-        public static readonly SolidColorBrush CardBorder = BrushFromHex("#12FFFFFF");
-        public static readonly SolidColorBrush SubtleBorder = BrushFromHex("#1EFFFFFF");
-        public static readonly SolidColorBrush DividerBrush = BrushFromHex("#14FFFFFF");
+        public static readonly SolidColorBrush SurfaceStroke = RegisterThemeBrush("#14FFFFFF");
+        public static readonly SolidColorBrush CardBorder = RegisterThemeBrush("#12FFFFFF");
+        public static readonly SolidColorBrush SubtleBorder = RegisterThemeBrush("#1EFFFFFF");
+        public static readonly SolidColorBrush DividerBrush = RegisterThemeBrush("#14FFFFFF");
+        public static readonly SolidColorBrush SwitchTrackBorder = RegisterThemeBrush("#8AFFFFFF");
 
-        // Windows 11 Dark Theme Accent (#60CDFF fill with dark ink, #0078D4 alternative)
-        public static readonly SolidColorBrush AccentBrush = BrushFromHex("#60CDFF");
-        public static readonly SolidColorBrush AccentHoverBrush = BrushFromHex("#78D6FF");
-        public static readonly SolidColorBrush AccentPressedBrush = BrushFromHex("#4CC2FF");
-        public static readonly SolidColorBrush AccentInkBrush = BrushFromHex("#001420");
-        public static readonly SolidColorBrush DangerBrush = BrushFromHex("#FF99A4");
-        public static readonly SolidColorBrush SuccessBrush = BrushFromHex("#6CCB5F");
+        public static readonly SolidColorBrush AccentBrush = RegisterThemeBrush("#60CDFF");
+        public static readonly SolidColorBrush AccentHoverBrush = RegisterThemeBrush("#78D6FF");
+        public static readonly SolidColorBrush AccentPressedBrush = RegisterThemeBrush("#4CC2FF");
+        public static readonly SolidColorBrush AccentInkBrush = RegisterThemeBrush("#001420");
+        public static readonly SolidColorBrush DangerBrush = RegisterThemeBrush("#FF99A4");
+        public static readonly SolidColorBrush SuccessBrush = RegisterThemeBrush("#6CCB5F");
 
-        public static readonly SolidColorBrush TextPrimary = BrushFromHex("#FFFFFF");
-        public static readonly SolidColorBrush TextSecondary = BrushFromHex("#C5C5C5");
-        public static readonly SolidColorBrush TextMuted = BrushFromHex("#8A8A8A");
+        public static readonly SolidColorBrush TextPrimary = RegisterThemeBrush("#FFFFFF");
+        public static readonly SolidColorBrush TextSecondary = RegisterThemeBrush("#C5C5C5");
+        public static readonly SolidColorBrush TextMuted = RegisterThemeBrush("#8A8A8A");
+
+        public static bool IsLightThemeActive { get; private set; }
+        public static int ActiveCaptionColorRef => IsLightThemeActive ? 0x00F3F3F3 : 0x00202020;
+
+        public static event Action ThemeChanged;
+
+        private static Color ParseColor(string hex) => (Color)ColorConverter.ConvertFromString(hex);
+
+        private static SolidColorBrush RegisterThemeBrush(string hex)
+        {
+            var publicBrush = new SolidColorBrush(ParseColor(hex));
+            _slots[publicBrush] = new ThemeBrushSlot(BrushFromHex(hex));
+            return publicBrush;
+        }
+
+        private static void SetThemeBrush(SolidColorBrush publicBrush, string hex)
+        {
+            publicBrush.Color = ParseColor(hex);
+            if (_slots.TryGetValue(publicBrush, out ThemeBrushSlot slot))
+            {
+                slot.Brush = BrushFromHex(hex);
+            }
+        }
+
+        private static Binding BindBrush(SolidColorBrush scb)
+        {
+            return new Binding(nameof(ThemeBrushSlot.Brush))
+            {
+                Source = _slots[scb],
+                Mode = BindingMode.OneWay
+            };
+        }
+
+        private static void SetFactoryBrush(FrameworkElementFactory factory, DependencyProperty prop, Brush brush)
+        {
+            if (brush is SolidColorBrush scb && _slots.ContainsKey(scb))
+            {
+                factory.SetBinding(prop, BindBrush(scb));
+            }
+            else
+            {
+                factory.SetValue(prop, brush);
+            }
+        }
+
+        private static Setter CreateBrushSetter(DependencyProperty prop, Brush brush, string targetName = null)
+        {
+            object val = (brush is SolidColorBrush scb && _slots.ContainsKey(scb))
+                ? (object)BindBrush(scb)
+                : brush;
+            return targetName == null
+                ? new Setter(prop, val)
+                : new Setter(prop, val, targetName);
+        }
 
         public static SolidColorBrush BrushFromHex(string hex)
         {
-            var color = (Color)ColorConverter.ConvertFromString(hex);
-            var brush = new SolidColorBrush(color);
+            var brush = new SolidColorBrush(ParseColor(hex));
             brush.Freeze();
             return brush;
+        }
+
+        public static bool IsWindowsAppLightMode()
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", writable: false))
+                {
+                    if (key != null)
+                    {
+                        int val = Convert.ToInt32(key.GetValue("AppsUseLightTheme", 0));
+                        return val != 0;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return false;
+        }
+
+        public static void ApplyTheme(BinThemeMode mode, bool useAcrylicFlyout = true)
+        {
+            bool useLight = mode == BinThemeMode.Light ||
+                            (mode == BinThemeMode.System && IsWindowsAppLightMode());
+
+            IsLightThemeActive = useLight;
+
+            if (useLight)
+            {
+                SetThemeBrush(ShellBg, "#F3F3F3");
+                SetThemeBrush(WindowBg, "#F3F3F3");
+                SetThemeBrush(SidebarBg, "#F3F3F3");
+                SetThemeBrush(LayerBg, "#FBFBFB");
+                SetThemeBrush(PopupBg, useAcrylicFlyout ? "#CCF9F9F9" : "#F9F9F9");
+                SetThemeBrush(FlyoutBg, "#F9F9F9");
+
+                SetThemeBrush(CardBg, "#B8FFFFFF");
+                SetThemeBrush(CardHoverBg, "#09000000");
+                SetThemeBrush(CardSelectedBg, "#10000000");
+                SetThemeBrush(SubtleHoverBg, "#0B000000");
+                SetThemeBrush(SubtlePressedBg, "#14000000");
+                SetThemeBrush(InputBg, "#FFFFFF");
+                SetThemeBrush(SegmentedTrackBg, "#EBEBEB");
+
+                SetThemeBrush(SurfaceStroke, "#16000000");
+                SetThemeBrush(CardBorder, "#12000000");
+                SetThemeBrush(SubtleBorder, "#20000000");
+                SetThemeBrush(DividerBrush, "#14000000");
+                SetThemeBrush(SwitchTrackBorder, "#72000000");
+
+                SetThemeBrush(AccentBrush, "#005FB8");
+                SetThemeBrush(AccentHoverBrush, "#196EC0");
+                SetThemeBrush(AccentPressedBrush, "#00529E");
+                SetThemeBrush(AccentInkBrush, "#FFFFFF");
+                SetThemeBrush(DangerBrush, "#C42B1C");
+                SetThemeBrush(SuccessBrush, "#0F7B0F");
+
+                SetThemeBrush(TextPrimary, "#1A1A1A");
+                SetThemeBrush(TextSecondary, "#484848");
+                SetThemeBrush(TextMuted, "#6E6E6E");
+            }
+            else
+            {
+                SetThemeBrush(ShellBg, "#202020");
+                SetThemeBrush(WindowBg, "#202020");
+                SetThemeBrush(SidebarBg, "#202020");
+                SetThemeBrush(LayerBg, "#272727");
+                SetThemeBrush(PopupBg, useAcrylicFlyout ? "#BF282828" : "#2C2C2C");
+                SetThemeBrush(FlyoutBg, "#2C2C2C");
+
+                SetThemeBrush(CardBg, "#0DFFFFFF");
+                SetThemeBrush(CardHoverBg, "#15FFFFFF");
+                SetThemeBrush(CardSelectedBg, "#18FFFFFF");
+                SetThemeBrush(SubtleHoverBg, "#12FFFFFF");
+                SetThemeBrush(SubtlePressedBg, "#0AFFFFFF");
+                SetThemeBrush(InputBg, "#12FFFFFF");
+                SetThemeBrush(SegmentedTrackBg, "#191919");
+
+                SetThemeBrush(SurfaceStroke, "#14FFFFFF");
+                SetThemeBrush(CardBorder, "#12FFFFFF");
+                SetThemeBrush(SubtleBorder, "#1EFFFFFF");
+                SetThemeBrush(DividerBrush, "#14FFFFFF");
+                SetThemeBrush(SwitchTrackBorder, "#8AFFFFFF");
+
+                SetThemeBrush(AccentBrush, "#60CDFF");
+                SetThemeBrush(AccentHoverBrush, "#78D6FF");
+                SetThemeBrush(AccentPressedBrush, "#4CC2FF");
+                SetThemeBrush(AccentInkBrush, "#001420");
+                SetThemeBrush(DangerBrush, "#FF99A4");
+                SetThemeBrush(SuccessBrush, "#6CCB5F");
+
+                SetThemeBrush(TextPrimary, "#FFFFFF");
+                SetThemeBrush(TextSecondary, "#C5C5C5");
+                SetThemeBrush(TextMuted, "#8A8A8A");
+            }
+
+            ThemeChanged?.Invoke();
         }
 
         /// <summary>
@@ -90,10 +274,10 @@ namespace WinBins.Views
                             <Thumb>
                                 <Thumb.Template>
                                     <ControlTemplate TargetType='{x:Type Thumb}'>
-                                        <Border x:Name='Pill' Background='#38FFFFFF' CornerRadius='3' Margin='1.5,2,1.5,2'/>
+                                        <Border x:Name='Pill' Background='#48888888' CornerRadius='3' Margin='1.5,2,1.5,2'/>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property='IsMouseOver' Value='True'>
-                                                <Setter TargetName='Pill' Property='Background' Value='#66FFFFFF'/>
+                                                <Setter TargetName='Pill' Property='Background' Value='#80888888'/>
                                                 <Setter TargetName='Pill' Property='Margin' Value='1,2,1,2'/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
@@ -118,8 +302,8 @@ namespace WinBins.Views
             var style = new Style(typeof(ToolTip));
             var template = new ControlTemplate(typeof(ToolTip));
             var border = new FrameworkElementFactory(typeof(Border));
-            border.SetValue(Border.BackgroundProperty, FlyoutBg);
-            border.SetValue(Border.BorderBrushProperty, SubtleBorder);
+            SetFactoryBrush(border, Border.BackgroundProperty, FlyoutBg);
+            SetFactoryBrush(border, Border.BorderBrushProperty, SubtleBorder);
             border.SetValue(Border.BorderThicknessProperty, new Thickness(1));
             border.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
             border.SetValue(Border.PaddingProperty, new Thickness(10, 6, 10, 6));
@@ -128,7 +312,7 @@ namespace WinBins.Views
             border.AppendChild(presenter);
             template.VisualTree = border;
 
-            style.Setters.Add(new Setter(Control.ForegroundProperty, TextPrimary));
+            style.Setters.Add(CreateBrushSetter(Control.ForegroundProperty, TextPrimary));
             style.Setters.Add(new Setter(Control.FontFamilyProperty, BodyFont));
             style.Setters.Add(new Setter(Control.FontSizeProperty, 12.0));
             style.Setters.Add(new Setter(Control.TemplateProperty, template));
@@ -140,8 +324,8 @@ namespace WinBins.Views
             var style = new Style(typeof(ContextMenu));
             var template = new ControlTemplate(typeof(ContextMenu));
             var border = new FrameworkElementFactory(typeof(Border));
-            border.SetValue(Border.BackgroundProperty, FlyoutBg);
-            border.SetValue(Border.BorderBrushProperty, SubtleBorder);
+            SetFactoryBrush(border, Border.BackgroundProperty, FlyoutBg);
+            SetFactoryBrush(border, Border.BorderBrushProperty, SubtleBorder);
             border.SetValue(Border.BorderThicknessProperty, new Thickness(1));
             border.SetValue(Border.CornerRadiusProperty, new CornerRadius(8));
             border.SetValue(Border.PaddingProperty, new Thickness(4));
@@ -157,15 +341,17 @@ namespace WinBins.Views
             return style;
         }
 
-        private static Style CreateWin11MenuItemStyle()
+        public static Style CreateWin11MenuItemStyle()
         {
             var style = new Style(typeof(MenuItem));
             var template = new ControlTemplate(typeof(MenuItem));
 
+            var outerGrid = new FrameworkElementFactory(typeof(Grid));
+
             var border = new FrameworkElementFactory(typeof(Border), "MenuRow");
             border.SetValue(Border.BackgroundProperty, Brushes.Transparent);
             border.SetValue(Border.CornerRadiusProperty, new CornerRadius(5));
-            border.SetValue(Border.PaddingProperty, new Thickness(10, 7, 14, 7));
+            border.SetValue(Border.PaddingProperty, new Thickness(10, 7, 12, 7));
             border.SetValue(FrameworkElement.MarginProperty, new Thickness(1));
 
             var grid = new FrameworkElementFactory(typeof(Grid));
@@ -173,8 +359,11 @@ namespace WinBins.Views
             colIcon.SetValue(ColumnDefinition.WidthProperty, GridLength.Auto);
             var colText = new FrameworkElementFactory(typeof(ColumnDefinition));
             colText.SetValue(ColumnDefinition.WidthProperty, new GridLength(1, GridUnitType.Star));
+            var colArrow = new FrameworkElementFactory(typeof(ColumnDefinition));
+            colArrow.SetValue(ColumnDefinition.WidthProperty, GridLength.Auto);
             grid.AppendChild(colIcon);
             grid.AppendChild(colText);
+            grid.AppendChild(colArrow);
 
             var iconPresenter = new FrameworkElementFactory(typeof(ContentPresenter), "IconHost");
             iconPresenter.SetValue(ContentPresenter.ContentSourceProperty, "Icon");
@@ -190,20 +379,69 @@ namespace WinBins.Views
             headerPresenter.SetValue(Grid.ColumnProperty, 1);
             grid.AppendChild(headerPresenter);
 
+            var subArrow = new FrameworkElementFactory(typeof(TextBlock), "SubmenuChevron");
+            subArrow.SetValue(TextBlock.TextProperty, "\uE76C");
+            subArrow.SetValue(TextBlock.FontFamilyProperty, IconFont);
+            subArrow.SetValue(TextBlock.FontSizeProperty, 10.0);
+            SetFactoryBrush(subArrow, TextBlock.ForegroundProperty, TextMuted);
+            subArrow.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            subArrow.SetValue(FrameworkElement.MarginProperty, new Thickness(14, 0, 0, 0));
+            subArrow.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+            subArrow.SetValue(Grid.ColumnProperty, 2);
+            grid.AppendChild(subArrow);
+
             border.AppendChild(grid);
-            template.VisualTree = border;
+            outerGrid.AppendChild(border);
+
+            // Cascading submenu popup (used by Folder Peek and nested submenus)
+            var popup = new FrameworkElementFactory(typeof(Popup), "PART_Popup");
+            popup.SetValue(Popup.AllowsTransparencyProperty, true);
+            popup.SetValue(Popup.PlacementProperty, PlacementMode.Right);
+            popup.SetValue(Popup.HorizontalOffsetProperty, 2.0);
+            popup.SetValue(Popup.FocusableProperty, false);
+            popup.SetValue(Popup.PopupAnimationProperty, PopupAnimation.Fade);
+            popup.SetBinding(Popup.IsOpenProperty, new Binding("IsSubmenuOpen")
+            {
+                RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+            });
+
+            var popBorder = new FrameworkElementFactory(typeof(Border));
+            SetFactoryBrush(popBorder, Border.BackgroundProperty, FlyoutBg);
+            SetFactoryBrush(popBorder, Border.BorderBrushProperty, SubtleBorder);
+            popBorder.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            popBorder.SetValue(Border.CornerRadiusProperty, new CornerRadius(8));
+            popBorder.SetValue(Border.PaddingProperty, new Thickness(4));
+
+            var popScroll = new FrameworkElementFactory(typeof(ScrollViewer));
+            popScroll.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
+            popScroll.SetValue(ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled);
+            popScroll.SetValue(FrameworkElement.MaxHeightProperty, 380.0);
+
+            var subItemsHost = new FrameworkElementFactory(typeof(StackPanel));
+            subItemsHost.SetValue(Panel.IsItemsHostProperty, true);
+            subItemsHost.SetValue(KeyboardNavigation.DirectionalNavigationProperty, KeyboardNavigationMode.Cycle);
+            popScroll.AppendChild(subItemsHost);
+            popBorder.AppendChild(popScroll);
+            popup.AppendChild(popBorder);
+            outerGrid.AppendChild(popup);
+
+            template.VisualTree = outerGrid;
 
             var noIconTrigger = new Trigger { Property = MenuItem.IconProperty, Value = null };
             noIconTrigger.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Collapsed, "IconHost"));
             template.Triggers.Add(noIconTrigger);
 
+            var hasItemsTrigger = new Trigger { Property = ItemsControl.HasItemsProperty, Value = true };
+            hasItemsTrigger.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible, "SubmenuChevron"));
+            template.Triggers.Add(hasItemsTrigger);
+
             var hoverTrigger = new Trigger { Property = MenuItem.IsHighlightedProperty, Value = true };
-            hoverTrigger.Setters.Add(new Setter(Border.BackgroundProperty, SubtleHoverBg, "MenuRow"));
+            hoverTrigger.Setters.Add(CreateBrushSetter(Border.BackgroundProperty, SubtleHoverBg, "MenuRow"));
             template.Triggers.Add(hoverTrigger);
 
             style.Setters.Add(new Setter(Control.FontFamilyProperty, BodyFont));
             style.Setters.Add(new Setter(Control.FontSizeProperty, 13.0));
-            style.Setters.Add(new Setter(Control.ForegroundProperty, TextPrimary));
+            style.Setters.Add(CreateBrushSetter(Control.ForegroundProperty, TextPrimary));
             style.Setters.Add(new Setter(FrameworkElement.CursorProperty, Cursors.Hand));
             style.Setters.Add(new Setter(Control.TemplateProperty, template));
             return style;
@@ -305,8 +543,8 @@ namespace WinBins.Views
 
             var template = new ControlTemplate(typeof(Button));
             var borderFactory = new FrameworkElementFactory(typeof(Border), "rootBorder");
-            borderFactory.SetValue(Border.BackgroundProperty, normalBg);
-            borderFactory.SetValue(Border.BorderBrushProperty, borderBrush);
+            SetFactoryBrush(borderFactory, Border.BackgroundProperty, normalBg);
+            SetFactoryBrush(borderFactory, Border.BorderBrushProperty, borderBrush);
             borderFactory.SetValue(Border.BorderThicknessProperty, new Thickness(1));
             borderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(5));
             borderFactory.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
@@ -319,11 +557,11 @@ namespace WinBins.Views
             template.VisualTree = borderFactory;
 
             var mouseOverTrigger = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-            mouseOverTrigger.Setters.Add(new Setter(Border.BackgroundProperty, hoverBg, "rootBorder"));
+            mouseOverTrigger.Setters.Add(CreateBrushSetter(Border.BackgroundProperty, hoverBg, "rootBorder"));
             template.Triggers.Add(mouseOverTrigger);
 
             var pressedTrigger = new Trigger { Property = ButtonBase.IsPressedProperty, Value = true };
-            pressedTrigger.Setters.Add(new Setter(Border.BackgroundProperty, pressedBg, "rootBorder"));
+            pressedTrigger.Setters.Add(CreateBrushSetter(Border.BackgroundProperty, pressedBg, "rootBorder"));
             template.Triggers.Add(pressedTrigger);
 
             var disabledTrigger = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
@@ -392,7 +630,7 @@ namespace WinBins.Views
             {
                 var watermark = new FrameworkElementFactory(typeof(TextBlock), "WatermarkText");
                 watermark.SetValue(TextBlock.TextProperty, placeholder);
-                watermark.SetValue(TextBlock.ForegroundProperty, TextMuted);
+                SetFactoryBrush(watermark, TextBlock.ForegroundProperty, TextMuted);
                 watermark.SetValue(TextBlock.MarginProperty, new Thickness(12, 0, 10, 0));
                 watermark.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
                 watermark.SetValue(UIElement.IsHitTestVisibleProperty, false);
@@ -412,14 +650,14 @@ namespace WinBins.Views
             focusLine.SetValue(FrameworkElement.HeightProperty, 2.0);
             focusLine.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Bottom);
             focusLine.SetValue(Border.CornerRadiusProperty, new CornerRadius(0, 0, 5, 5));
-            focusLine.SetValue(Border.BackgroundProperty, BrushFromHex("#3AFFFFFF"));
+            SetFactoryBrush(focusLine, Border.BackgroundProperty, SubtleBorder);
             outerGrid.AppendChild(focusLine);
 
             template.VisualTree = outerGrid;
 
             var focusTrigger = new Trigger { Property = UIElement.IsKeyboardFocusedProperty, Value = true };
-            focusTrigger.Setters.Add(new Setter(Border.BackgroundProperty, BrushFromHex("#191919"), "tbBorder"));
-            focusTrigger.Setters.Add(new Setter(Border.BackgroundProperty, AccentBrush, "FocusLine"));
+            focusTrigger.Setters.Add(CreateBrushSetter(Border.BackgroundProperty, InputBg, "tbBorder"));
+            focusTrigger.Setters.Add(CreateBrushSetter(Border.BackgroundProperty, AccentBrush, "FocusLine"));
             template.Triggers.Add(focusTrigger);
 
             tb.Template = template;
@@ -470,13 +708,13 @@ namespace WinBins.Views
             template.VisualTree = outerGrid;
 
             var hoverTrigger = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-            hoverTrigger.Setters.Add(new Setter(Border.BackgroundProperty, SubtleHoverBg, "TitleBorder"));
+            hoverTrigger.Setters.Add(CreateBrushSetter(Border.BackgroundProperty, SubtleHoverBg, "TitleBorder"));
             template.Triggers.Add(hoverTrigger);
 
             var focusTrigger = new Trigger { Property = UIElement.IsKeyboardFocusedProperty, Value = true };
-            focusTrigger.Setters.Add(new Setter(Border.BackgroundProperty, BrushFromHex("#191919"), "TitleBorder"));
-            focusTrigger.Setters.Add(new Setter(Border.BorderBrushProperty, SurfaceStroke, "TitleBorder"));
-            focusTrigger.Setters.Add(new Setter(Border.BackgroundProperty, AccentBrush, "TitleFocusLine"));
+            focusTrigger.Setters.Add(CreateBrushSetter(Border.BackgroundProperty, InputBg, "TitleBorder"));
+            focusTrigger.Setters.Add(CreateBrushSetter(Border.BorderBrushProperty, SurfaceStroke, "TitleBorder"));
+            focusTrigger.Setters.Add(CreateBrushSetter(Border.BackgroundProperty, AccentBrush, "TitleFocusLine"));
             template.Triggers.Add(focusTrigger);
 
             tb.Template = template;
@@ -508,15 +746,15 @@ namespace WinBins.Views
             track.SetValue(FrameworkElement.WidthProperty, 40.0);
             track.SetValue(FrameworkElement.HeightProperty, 20.0);
             track.SetValue(Border.CornerRadiusProperty, new CornerRadius(10));
-            track.SetValue(Border.BackgroundProperty, BrushFromHex("#14FFFFFF"));
-            track.SetValue(Border.BorderBrushProperty, BrushFromHex("#8AFFFFFF"));
+            SetFactoryBrush(track, Border.BackgroundProperty, SubtleHoverBg);
+            SetFactoryBrush(track, Border.BorderBrushProperty, SwitchTrackBorder);
             track.SetValue(Border.BorderThicknessProperty, new Thickness(1));
 
             var thumb = new FrameworkElementFactory(typeof(Border), "SwitchThumb");
             thumb.SetValue(FrameworkElement.WidthProperty, 12.0);
             thumb.SetValue(FrameworkElement.HeightProperty, 12.0);
             thumb.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
-            thumb.SetValue(Border.BackgroundProperty, TextSecondary);
+            SetFactoryBrush(thumb, Border.BackgroundProperty, TextSecondary);
             thumb.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Left);
             thumb.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
             thumb.SetValue(FrameworkElement.MarginProperty, new Thickness(3, 0, 3, 0));
@@ -535,9 +773,9 @@ namespace WinBins.Views
             template.VisualTree = stack;
 
             var checkedTrigger = new Trigger { Property = ToggleButton.IsCheckedProperty, Value = true };
-            checkedTrigger.Setters.Add(new Setter(Border.BackgroundProperty, AccentBrush, "SwitchTrack"));
-            checkedTrigger.Setters.Add(new Setter(Border.BorderBrushProperty, AccentBrush, "SwitchTrack"));
-            checkedTrigger.Setters.Add(new Setter(Border.BackgroundProperty, AccentInkBrush, "SwitchThumb"));
+            checkedTrigger.Setters.Add(CreateBrushSetter(Border.BackgroundProperty, AccentBrush, "SwitchTrack"));
+            checkedTrigger.Setters.Add(CreateBrushSetter(Border.BorderBrushProperty, AccentBrush, "SwitchTrack"));
+            checkedTrigger.Setters.Add(CreateBrushSetter(Border.BackgroundProperty, AccentInkBrush, "SwitchThumb"));
             checkedTrigger.Setters.Add(new Setter(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Right, "SwitchThumb"));
             template.Triggers.Add(checkedTrigger);
 
@@ -570,8 +808,8 @@ namespace WinBins.Views
             box.SetValue(FrameworkElement.WidthProperty, 18.0);
             box.SetValue(FrameworkElement.HeightProperty, 18.0);
             box.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
-            box.SetValue(Border.BackgroundProperty, BrushFromHex("#14FFFFFF"));
-            box.SetValue(Border.BorderBrushProperty, BrushFromHex("#77FFFFFF"));
+            SetFactoryBrush(box, Border.BackgroundProperty, SubtleHoverBg);
+            SetFactoryBrush(box, Border.BorderBrushProperty, SwitchTrackBorder);
             box.SetValue(Border.BorderThicknessProperty, new Thickness(1));
 
             var checkGlyph = new FrameworkElementFactory(typeof(TextBlock), "CheckGlyph");
@@ -579,7 +817,7 @@ namespace WinBins.Views
             checkGlyph.SetValue(TextBlock.FontFamilyProperty, IconFont);
             checkGlyph.SetValue(TextBlock.FontSizeProperty, 11.0);
             checkGlyph.SetValue(TextBlock.FontWeightProperty, FontWeights.Bold);
-            checkGlyph.SetValue(TextBlock.ForegroundProperty, AccentInkBrush);
+            SetFactoryBrush(checkGlyph, TextBlock.ForegroundProperty, AccentInkBrush);
             checkGlyph.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
             checkGlyph.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
             checkGlyph.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
@@ -598,12 +836,12 @@ namespace WinBins.Views
             template.VisualTree = stack;
 
             var hoverTrigger = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-            hoverTrigger.Setters.Add(new Setter(Border.BackgroundProperty, BrushFromHex("#22FFFFFF"), "CheckBoxBorder"));
+            hoverTrigger.Setters.Add(CreateBrushSetter(Border.BackgroundProperty, CardHoverBg, "CheckBoxBorder"));
             template.Triggers.Add(hoverTrigger);
 
             var checkedTrigger = new Trigger { Property = ToggleButton.IsCheckedProperty, Value = true };
-            checkedTrigger.Setters.Add(new Setter(Border.BackgroundProperty, AccentBrush, "CheckBoxBorder"));
-            checkedTrigger.Setters.Add(new Setter(Border.BorderBrushProperty, AccentBrush, "CheckBoxBorder"));
+            checkedTrigger.Setters.Add(CreateBrushSetter(Border.BackgroundProperty, AccentBrush, "CheckBoxBorder"));
+            checkedTrigger.Setters.Add(CreateBrushSetter(Border.BorderBrushProperty, AccentBrush, "CheckBoxBorder"));
             checkedTrigger.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible, "CheckGlyph"));
             template.Triggers.Add(checkedTrigger);
 
@@ -643,7 +881,7 @@ namespace WinBins.Views
             var template = new ControlTemplate(typeof(Separator));
             var line = new FrameworkElementFactory(typeof(Border));
             line.SetValue(FrameworkElement.HeightProperty, 1.0);
-            line.SetValue(Border.BackgroundProperty, DividerBrush);
+            SetFactoryBrush(line, Border.BackgroundProperty, DividerBrush);
             template.VisualTree = line;
             sep.Template = template;
             return sep;

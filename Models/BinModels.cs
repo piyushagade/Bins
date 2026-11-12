@@ -18,13 +18,21 @@ namespace WinBins.Models
         Spacious = 2
     }
 
+    public enum BinThemeMode
+    {
+        Dark = 0,
+        Light = 1,
+        System = 2
+    }
+
     public enum BinItemKind
     {
         Application = 0,
         Folder = 1,
         Shortcut = 2,
         FileOrUrl = 3,
-        WebUrl = 4
+        WebUrl = 4,
+        PackagedApp = 5
     }
 
     [DataContract]
@@ -48,6 +56,18 @@ namespace WinBins.Models
         [DataMember(Order = 6)]
         public bool HideRunningAppsOnTaskbar { get; set; } = false;
 
+        [DataMember(Order = 7)]
+        public bool HoverToOpenFlyout { get; set; } = false;
+
+        [DataMember(Order = 8)]
+        public int HoverOpenDelayMs { get; set; } = 280;
+
+        [DataMember(Order = 9)]
+        public BinThemeMode ThemeMode { get; set; } = BinThemeMode.Dark;
+
+        [DataMember(Order = 10)]
+        public bool UseAcrylicFlyout { get; set; } = true;
+
         public AppConfig()
         {
             SetFieldDefaults();
@@ -67,6 +87,10 @@ namespace WinBins.Models
             MinimizeToTrayOnClose = true;
             HidePinToTaskbarPrompt = false;
             HideRunningAppsOnTaskbar = false;
+            HoverToOpenFlyout = false;
+            HoverOpenDelayMs = 280;
+            ThemeMode = BinThemeMode.Dark;
+            UseAcrylicFlyout = true;
         }
 
         public void EnsureDefaults()
@@ -75,6 +99,9 @@ namespace WinBins.Models
             {
                 Bins = new List<BinGroup>();
             }
+
+            if (HoverOpenDelayMs < 100) HoverOpenDelayMs = 100;
+            if (HoverOpenDelayMs > 1500) HoverOpenDelayMs = 1500;
 
             foreach (var bin in Bins)
             {
@@ -143,6 +170,12 @@ namespace WinBins.Models
         [DataMember(Order = 19)]
         public bool HideRunningAppsOnTaskbar { get; set; }
 
+        [DataMember(Order = 20)]
+        public string Hotkey { get; set; }
+
+        [DataMember(Order = 21)]
+        public bool ShowMosaicBackplate { get; set; }
+
         public BinGroup()
         {
             SetFieldDefaults();
@@ -175,6 +208,8 @@ namespace WinBins.Models
             ShowFlyoutEditButton = true;
             TaskbarOrder = int.MaxValue;
             HideRunningAppsOnTaskbar = false;
+            Hotkey = string.Empty;
+            ShowMosaicBackplate = false;
         }
 
         public void EnsureDefaults()
@@ -199,6 +234,7 @@ namespace WinBins.Models
 
             if (CustomIconPath == null) CustomIconPath = string.Empty;
             if (FlyoutIconPath == null) FlyoutIconPath = string.Empty;
+            if (Hotkey == null) Hotkey = string.Empty;
 
             if (Items == null)
             {
@@ -215,6 +251,8 @@ namespace WinBins.Models
     [DataContract]
     public class BinItem
     {
+        public const string ShellAppsPrefix = @"shell:AppsFolder\";
+
         [DataMember(Order = 1)]
         public string Id { get; set; } = Guid.NewGuid().ToString("N").Substring(0, 10);
 
@@ -278,6 +316,10 @@ namespace WinBins.Models
             {
                 Kind = BinItemKind.WebUrl;
             }
+            else if (!string.IsNullOrWhiteSpace(TargetPath) && IsPackagedApp(TargetPath))
+            {
+                Kind = BinItemKind.PackagedApp;
+            }
 
             if (string.IsNullOrWhiteSpace(Name) && !string.IsNullOrWhiteSpace(TargetPath))
             {
@@ -316,6 +358,27 @@ namespace WinBins.Models
                 CustomIconPath = customIconPath ?? string.Empty,
                 CustomIconIndex = customIconIndex
             };
+        }
+
+        public static BinItem FromPackagedApp(string appUserModelId, string displayName)
+        {
+            string fullTarget = appUserModelId != null && appUserModelId.StartsWith(ShellAppsPrefix, StringComparison.OrdinalIgnoreCase)
+                ? appUserModelId.Trim()
+                : ShellAppsPrefix + (appUserModelId ?? string.Empty).Trim();
+
+            return new BinItem
+            {
+                Id = Guid.NewGuid().ToString("N").Substring(0, 10),
+                Name = string.IsNullOrWhiteSpace(displayName) ? "App" : displayName.Trim(),
+                TargetPath = fullTarget,
+                Kind = BinItemKind.PackagedApp
+            };
+        }
+
+        public static bool IsPackagedApp(string value)
+        {
+            return !string.IsNullOrWhiteSpace(value) &&
+                   value.Trim().StartsWith(ShellAppsPrefix, StringComparison.OrdinalIgnoreCase);
         }
 
         public static bool IsWebUrl(string value)
@@ -382,6 +445,9 @@ namespace WinBins.Models
         {
             if (string.IsNullOrWhiteSpace(path))
                 return BinItemKind.FileOrUrl;
+
+            if (IsPackagedApp(path))
+                return BinItemKind.PackagedApp;
 
             if (IsWebUrl(path))
                 return BinItemKind.WebUrl;

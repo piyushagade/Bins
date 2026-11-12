@@ -162,6 +162,7 @@ namespace WinBins
         private IconService _iconService;
         private TaskbarBinHostManager _taskbarManager;
         private RunningAppsTaskbarManager _runningAppsManager;
+        private GlobalHotkeyManager _hotkeyManager;
         private BinPopupWindow _popupWindow;
         private MainWindow _mainWindow;
         private System.Windows.Forms.NotifyIcon _trayIcon;
@@ -196,29 +197,62 @@ namespace WinBins
 
             _configService = new ConfigService();
             _configService.Load();
+            if (_configService.Current != null)
+            {
+                FluentTheme.ApplyTheme(_configService.Current.ThemeMode, _configService.Current.UseAcrylicFlyout);
+            }
 
             _iconService = new IconService(_configService);
             _taskbarManager = new TaskbarBinHostManager(_configService, _iconService, Dispatcher);
             _runningAppsManager = new RunningAppsTaskbarManager(_configService, Dispatcher);
+            _hotkeyManager = new GlobalHotkeyManager();
 
             _popupWindow = new BinPopupWindow(
                 _configService,
                 _iconService,
                 _runningAppsManager,
+                _taskbarManager,
                 onCustomizeRequested: bin => ShowManager(bin),
                 onBinModified: bin =>
                 {
                     _taskbarManager.RefreshBin(bin);
                     _runningAppsManager.SyncRunningWindows();
+                    _hotkeyManager.SyncHotkeys(_configService.Current?.Bins);
                     _mainWindow?.RefreshFullUi();
                     RebuildTrayMenu();
                 });
 
-            _mainWindow = new MainWindow(_configService, _iconService, _taskbarManager, _popupWindow, _runningAppsManager);
+            _mainWindow = new MainWindow(
+                _configService,
+                _iconService,
+                _taskbarManager,
+                _popupWindow,
+                _runningAppsManager,
+                _hotkeyManager);
 
             _taskbarManager.BinTaskbarIconClicked += (bin, cursorPt) =>
             {
                 _popupWindow.ToggleAtScreenPoint(bin, cursorPt);
+            };
+
+            _taskbarManager.BinTaskbarHoverTriggered += (bin, anchorPt, isDragHover) =>
+            {
+                // When triggered by dragging a file over the taskbar icon, keep popup open until drop/dismiss;
+                // when triggered by normal cursor hover, enable auto-dismiss when cursor leaves safe zone.
+                _popupWindow.ShowForBin(bin, anchorPt, openedByHover: true);
+            };
+
+            _hotkeyManager.BinHotkeyPressed += bin =>
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (!_taskbarManager.TryGetBinTaskbarAnchorPoint(bin.Id, out System.Drawing.Point anchorPt))
+                    {
+                        Win32Interop.GetCursorPos(out Win32Interop.POINT cursorPt);
+                        anchorPt = new System.Drawing.Point(cursorPt.X, cursorPt.Y);
+                    }
+                    _popupWindow.ToggleAtScreenPoint(bin, anchorPt);
+                }));
             };
 
             _taskbarManager.BinClosedFromTaskbar += () =>
@@ -236,6 +270,7 @@ namespace WinBins
 
             _taskbarManager.SyncAllBins();
             _runningAppsManager.SyncRunningWindows();
+            _hotkeyManager.SyncHotkeys(_configService.Current?.Bins);
             InitializeSystemTray();
             StartIpcServer();
 
@@ -491,6 +526,7 @@ namespace WinBins
             }
             _trayDrawingIcon?.Dispose();
 
+            _hotkeyManager?.Dispose();
             _runningAppsManager?.Dispose();
             _taskbarManager?.Dispose();
             _iconService?.Dispose();

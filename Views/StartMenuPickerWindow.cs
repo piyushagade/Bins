@@ -28,7 +28,7 @@ namespace WinBins.Views
             _iconService = iconService;
             _allApps = LauncherService.DiscoverStartMenuApps();
 
-            Title = "Add Installed Apps from Start Menu";
+            Title = "Add Installed & Store Apps";
             Width = 540;
             Height = 580;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -40,7 +40,7 @@ namespace WinBins.Views
             SourceInitialized += (_, __) =>
             {
                 IntPtr hwnd = new WindowInteropHelper(this).Handle;
-                Win32Interop.ApplyWindows11WindowStyling(hwnd);
+                Win32Interop.ApplyWindows11WindowStyling(hwnd, forceDarkMode: !FluentTheme.IsLightThemeActive);
             };
 
             var root = new Grid { Margin = new Thickness(20, 16, 20, 18) };
@@ -60,7 +60,7 @@ namespace WinBins.Views
             Grid.SetRow(header, 0);
             root.Children.Add(header);
 
-            _searchBox = FluentTheme.CreateTextBox("", "Search Start Menu apps...");
+            _searchBox = FluentTheme.CreateTextBox("", "Search Start Menu & Microsoft Store apps...");
             _searchBox.Margin = new Thickness(0, 0, 0, 12);
             _searchBox.TextChanged += (_, __) => RebuildList();
             Grid.SetRow(_searchBox, 1);

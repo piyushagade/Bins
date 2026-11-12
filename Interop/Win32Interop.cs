@@ -19,9 +19,23 @@ namespace WinBins.Interop
         public const int WM_ERASEBKGND = 0x0014;
         public const int WM_SETICON = 0x0080;
         public const int WM_SYSCOMMAND = 0x0112;
+        public const int WM_HOTKEY = 0x0312;
         public const int WM_DWMSENDICONICTHUMBNAIL = 0x0323;
         public const int WM_DWMSENDICONICLIVEPREVIEWBITMAP = 0x0326;
         public const int WM_USER = 0x0400;
+
+        public const uint MOD_ALT = 0x0001;
+        public const uint MOD_CONTROL = 0x0002;
+        public const uint MOD_SHIFT = 0x0004;
+        public const uint MOD_WIN = 0x0008;
+        public const uint MOD_NOREPEAT = 0x4000;
+
+        public const int VK_LBUTTON = 0x01;
+
+        public const uint FO_MOVE = 0x0001;
+        public const uint FO_COPY = 0x0002;
+        public const ushort FOF_ALLOWUNDO = 0x0040;
+        public const ushort FOF_NOCONFIRMMKDIR = 0x0200;
 
         public const int WA_INACTIVE = 0;
         public const int WA_ACTIVE = 1;
@@ -136,6 +150,32 @@ namespace WinBins.Interop
         {
             public int X;
             public int Y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct SHFILEOPSTRUCTW
+        {
+            public IntPtr hwnd;
+            public uint wFunc;
+            [MarshalAs(UnmanagedType.LPWStr)]
+            public string pFrom;
+            [MarshalAs(UnmanagedType.LPWStr)]
+            public string pTo;
+            public ushort fFlags;
+            [MarshalAs(UnmanagedType.Bool)]
+            public bool fAnyOperationsAborted;
+            public IntPtr hNameMappings;
+            [MarshalAs(UnmanagedType.LPWStr)]
+            public string lpszProgressTitle;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -583,6 +623,68 @@ namespace WinBins.Interop
         public static extern bool GetCursorPos(out POINT lpPoint);
 
         [DllImport("user32.dll")]
+        public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+        [DllImport("user32.dll")]
+        public static extern short GetAsyncKeyState(int vKey);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        public static extern int SHFileOperationW(ref SHFILEOPSTRUCTW lpFileOp);
+
+        public static bool ShellCopyOrMoveFilesToFolder(IEnumerable<string> sourcePaths, string destinationFolder, bool copy)
+        {
+            if (sourcePaths == null || string.IsNullOrWhiteSpace(destinationFolder) || !Directory.Exists(destinationFolder))
+                return false;
+
+            var validSources = new List<string>();
+            foreach (string raw in sourcePaths)
+            {
+                if (string.IsNullOrWhiteSpace(raw))
+                    continue;
+                string full = raw.Trim().Trim('"');
+                if (File.Exists(full) || Directory.Exists(full))
+                {
+                    // Avoid moving a folder into itself
+                    if (string.Equals(Path.GetFullPath(full).TrimEnd('\\'), Path.GetFullPath(destinationFolder).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    validSources.Add(full);
+                }
+            }
+
+            if (validSources.Count == 0)
+                return false;
+
+            // SHFileOperationW requires double-null-terminated strings
+            string pFrom = string.Join("\0", validSources) + "\0\0";
+            string pTo = Path.GetFullPath(destinationFolder) + "\0\0";
+
+            var op = new SHFILEOPSTRUCTW
+            {
+                hwnd = IntPtr.Zero,
+                wFunc = copy ? FO_COPY : FO_MOVE,
+                pFrom = pFrom,
+                pTo = pTo,
+                fFlags = (ushort)(FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR)
+            };
+
+            try
+            {
+                int res = SHFileOperationW(ref op);
+                return res == 0 && !op.fAnyOperationsAborted;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        [DllImport("user32.dll")]
         public static extern uint GetDpiForWindow(IntPtr hwnd);
 
         [DllImport("user32.dll", SetLastError = true)]
@@ -682,18 +784,18 @@ namespace WinBins.Interop
         /// - 4+ icons (2x2 grid): 58x58 each at (0, 0), (70, 0), (0, 70), and (70, 70) (12px horizontal and vertical padding).
         /// Caller is responsible for calling DestroyIcon on the returned handle when no longer needed.
         /// </summary>
-        public static IntPtr CreateGroupMosaicIconHandle(IList<Bitmap> subIcons)
+        public static IntPtr CreateGroupMosaicIconHandle(IList<Bitmap> subIcons, bool showBackplate = false)
         {
-            using (Bitmap mosaic = CreateGroupMosaicBitmap(subIcons))
+            using (Bitmap mosaic = CreateGroupMosaicBitmap(subIcons, showBackplate))
             {
                 return CreateAlphaIconHandle(mosaic);
             }
         }
 
         /// <summary>
-        /// Renders the group mosaic onto a completely transparent 128x128 32bpp ARGB Bitmap (no squircle tile or border).
+        /// Renders the group mosaic onto a 128x128 32bpp ARGB Bitmap (transparent or with a subtle frosted squircle backplate).
         /// </summary>
-        public static Bitmap CreateGroupMosaicBitmap(IList<Bitmap> subIcons)
+        public static Bitmap CreateGroupMosaicBitmap(IList<Bitmap> subIcons, bool showBackplate = false)
         {
             const int canvasSize = 128;
             var canvas = new Bitmap(canvasSize, canvasSize, PixelFormat.Format32bppArgb);
@@ -718,41 +820,87 @@ namespace WinBins.Interop
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                 g.CompositingQuality = CompositingQuality.HighQuality;
 
+                if (showBackplate)
+                {
+                    var plateRect = new Rectangle(2, 2, 124, 124);
+                    using (GraphicsPath platePath = CreateRoundedRectPath(plateRect, 28))
+                    using (var fillBrush = new LinearGradientBrush(
+                        plateRect,
+                        Color.FromArgb(205, 48, 52, 62),
+                        Color.FromArgb(195, 30, 32, 40),
+                        LinearGradientMode.Vertical))
+                    using (var borderPen = new Pen(Color.FromArgb(85, 255, 255, 255), 2.5f))
+                    {
+                        g.FillPath(fillBrush, platePath);
+                        g.DrawPath(borderPen, platePath);
+                    }
+                }
+
                 using (var imageAttrs = new ImageAttributes())
                 {
                     imageAttrs.SetWrapMode(WrapMode.TileFlipXY);
 
-                    switch (validIcons.Count)
+                    if (showBackplate)
                     {
-                        case 0:
-                            DrawEmptyPlaceholderGrid(g);
-                            break;
+                        switch (validIcons.Count)
+                        {
+                            case 0:
+                                DrawEmptyPlaceholderGrid(g, inset: true);
+                                break;
+                            case 1:
+                                DrawSubIcon(g, validIcons[0], new Rectangle(20, 20, 88, 88), imageAttrs);
+                                break;
+                            case 2:
+                                DrawSubIcon(g, validIcons[0], new Rectangle(13, 13, 48, 48), imageAttrs);
+                                DrawSubIcon(g, validIcons[1], new Rectangle(67, 67, 48, 48), imageAttrs);
+                                break;
+                            case 3:
+                                DrawSubIcon(g, validIcons[0], new Rectangle(13, 13, 47, 47), imageAttrs);
+                                DrawSubIcon(g, validIcons[1], new Rectangle(68, 13, 47, 47), imageAttrs);
+                                DrawSubIcon(g, validIcons[2], new Rectangle(40, 68, 47, 47), imageAttrs);
+                                break;
+                            default:
+                                DrawSubIcon(g, validIcons[0], new Rectangle(13, 13, 47, 47), imageAttrs);
+                                DrawSubIcon(g, validIcons[1], new Rectangle(68, 13, 47, 47), imageAttrs);
+                                DrawSubIcon(g, validIcons[2], new Rectangle(13, 68, 47, 47), imageAttrs);
+                                DrawSubIcon(g, validIcons[3], new Rectangle(68, 68, 47, 47), imageAttrs);
+                                break;
+                        }
+                    }
+                    else
+                    {
+                        switch (validIcons.Count)
+                        {
+                            case 0:
+                                DrawEmptyPlaceholderGrid(g, inset: false);
+                                break;
 
-                        case 1:
-                            // Single icon centered cleanly on the 128x128 transparent canvas
-                            DrawSubIcon(g, validIcons[0], new Rectangle(12, 12, 104, 104), imageAttrs);
-                            break;
+                            case 1:
+                                // Single icon centered cleanly on the 128x128 transparent canvas
+                                DrawSubIcon(g, validIcons[0], new Rectangle(12, 12, 104, 104), imageAttrs);
+                                break;
 
-                        case 2:
-                            // 2 icons: 62x62 each at (0, 0) and (66, 66)
-                            DrawSubIcon(g, validIcons[0], new Rectangle(0, 0, 62, 62), imageAttrs);
-                            DrawSubIcon(g, validIcons[1], new Rectangle(66, 66, 62, 62), imageAttrs);
-                            break;
+                            case 2:
+                                // 2 icons: 62x62 each at (0, 0) and (66, 66)
+                                DrawSubIcon(g, validIcons[0], new Rectangle(0, 0, 62, 62), imageAttrs);
+                                DrawSubIcon(g, validIcons[1], new Rectangle(66, 66, 62, 62), imageAttrs);
+                                break;
 
-                        case 3:
-                            // 3 icons: 58x58 each at (0, 0), (70, 0), and (35, 70) (12px separation)
-                            DrawSubIcon(g, validIcons[0], new Rectangle(0, 0, 58, 58), imageAttrs);
-                            DrawSubIcon(g, validIcons[1], new Rectangle(70, 0, 58, 58), imageAttrs);
-                            DrawSubIcon(g, validIcons[2], new Rectangle(35, 70, 58, 58), imageAttrs);
-                            break;
+                            case 3:
+                                // 3 icons: 58x58 each at (0, 0), (70, 0), and (35, 70) (12px separation)
+                                DrawSubIcon(g, validIcons[0], new Rectangle(0, 0, 58, 58), imageAttrs);
+                                DrawSubIcon(g, validIcons[1], new Rectangle(70, 0, 58, 58), imageAttrs);
+                                DrawSubIcon(g, validIcons[2], new Rectangle(35, 70, 58, 58), imageAttrs);
+                                break;
 
-                        default:
-                            // 4 icons (2x2 grid): 58x58 each at (0, 0), (70, 0), (0, 70), and (70, 70) (12px padding)
-                            DrawSubIcon(g, validIcons[0], new Rectangle(0, 0, 58, 58), imageAttrs);
-                            DrawSubIcon(g, validIcons[1], new Rectangle(70, 0, 58, 58), imageAttrs);
-                            DrawSubIcon(g, validIcons[2], new Rectangle(0, 70, 58, 58), imageAttrs);
-                            DrawSubIcon(g, validIcons[3], new Rectangle(70, 70, 58, 58), imageAttrs);
-                            break;
+                            default:
+                                // 4 icons (2x2 grid): 58x58 each at (0, 0), (70, 0), (0, 70), and (70, 70) (12px padding)
+                                DrawSubIcon(g, validIcons[0], new Rectangle(0, 0, 58, 58), imageAttrs);
+                                DrawSubIcon(g, validIcons[1], new Rectangle(70, 0, 58, 58), imageAttrs);
+                                DrawSubIcon(g, validIcons[2], new Rectangle(0, 70, 58, 58), imageAttrs);
+                                DrawSubIcon(g, validIcons[3], new Rectangle(70, 70, 58, 58), imageAttrs);
+                                break;
+                        }
                     }
                 }
             }
@@ -776,16 +924,24 @@ namespace WinBins.Interop
                 attrs);
         }
 
-        private static void DrawEmptyPlaceholderGrid(Graphics g)
+        private static void DrawEmptyPlaceholderGrid(Graphics g, bool inset = false)
         {
-            // Minimal subtle 2x2 glyph at the exact 58x58 mosaic slots when a bin has 0 items
-            Rectangle[] slots =
-            {
-                new Rectangle(0, 0, 58, 58),
-                new Rectangle(70, 0, 58, 58),
-                new Rectangle(0, 70, 58, 58),
-                new Rectangle(70, 70, 58, 58)
-            };
+            // Minimal subtle 2x2 glyph at the mosaic slots when a bin has 0 items
+            Rectangle[] slots = inset
+                ? new[]
+                {
+                    new Rectangle(15, 15, 44, 44),
+                    new Rectangle(69, 15, 44, 44),
+                    new Rectangle(15, 69, 44, 44),
+                    new Rectangle(69, 69, 44, 44)
+                }
+                : new[]
+                {
+                    new Rectangle(0, 0, 58, 58),
+                    new Rectangle(70, 0, 58, 58),
+                    new Rectangle(0, 70, 58, 58),
+                    new Rectangle(70, 70, 58, 58)
+                };
 
             Color[] accents =
             {
@@ -988,8 +1144,9 @@ namespace WinBins.Interop
                     return indexed;
             }
 
-            // 1. Primary Windows 11 High-DPI path: IShellItemImageFactory (handles .exe, .lnk, UWP shortcuts, folders, files at 256x256)
-            if (File.Exists(expanded) || Directory.Exists(expanded))
+            // 1. Primary Windows 11 High-DPI path: IShellItemImageFactory (handles .exe, .lnk, UWP/Store shell:AppsFolder\, folders, files at 256x256)
+            bool isShellAppsPath = expanded.StartsWith(@"shell:AppsFolder\", StringComparison.OrdinalIgnoreCase);
+            if (isShellAppsPath || File.Exists(expanded) || Directory.Exists(expanded))
             {
                 Bitmap shellFactoryBmp = TryExtractViaShellItemImageFactory(expanded, desiredSize);
                 if (shellFactoryBmp != null)
@@ -1432,14 +1589,16 @@ namespace WinBins.Interop
             IntPtr hwnd,
             bool useMica = false,
             bool smallRound = false,
-            int? captionColorRef = null)
+            int? captionColorRef = null,
+            bool useAcrylic = false,
+            bool? forceDarkMode = null)
         {
             if (hwnd == IntPtr.Zero)
                 return;
 
             try
             {
-                int dark = 1;
+                int dark = (forceDarkMode ?? true) ? 1 : 0;
                 DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
 
                 int corner = smallRound ? DWMWCP_ROUNDSMALL : DWMWCP_ROUND;
@@ -1453,10 +1612,20 @@ namespace WinBins.Interop
                     int color = captionColorRef.Value;
                     DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, ref color, sizeof(int));
                 }
+                else if (useAcrylic)
+                {
+                    int backdrop = DWMSBT_TRANSIENTWINDOW;
+                    DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
+                }
                 else if (useMica)
                 {
                     int backdrop = DWMSBT_MAINWINDOW;
                     DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
+                }
+                else
+                {
+                    int backdropNone = DWMSBT_NONE;
+                    DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdropNone, sizeof(int));
                 }
             }
             catch

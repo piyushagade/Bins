@@ -32,7 +32,7 @@ namespace WinBins.Services
             _configService = configService;
         }
 
-        private static void ResolveItemIconKey(BinItem item, out string sourcePath, out int resourceIndex, out string cacheKey)
+        private void ResolveItemIconKey(BinItem item, out string sourcePath, out int resourceIndex, out string cacheKey)
         {
             if (item == null)
             {
@@ -44,7 +44,7 @@ namespace WinBins.Services
 
             if (!string.IsNullOrWhiteSpace(item.CustomIconPath))
             {
-                sourcePath = item.CustomIconPath;
+                sourcePath = ResolveCustomIconPathWithFallback(item.CustomIconPath);
                 resourceIndex = item.CustomIconIndex;
                 cacheKey = $"custom|{sourcePath}|{resourceIndex}";
                 return;
@@ -62,6 +62,26 @@ namespace WinBins.Services
             sourcePath = item.TargetPath;
             resourceIndex = 0;
             cacheKey = string.IsNullOrWhiteSpace(sourcePath) ? "__fallback__" : $"target|{sourcePath}|0";
+        }
+
+        private string ResolveCustomIconPathWithFallback(string rawPath)
+        {
+            if (string.IsNullOrWhiteSpace(rawPath))
+                return rawPath;
+
+            string expanded = Environment.ExpandEnvironmentVariables(rawPath.Trim().Trim('"'));
+            if (File.Exists(expanded) || _configService == null)
+                return rawPath;
+
+            string fileName = Path.GetFileName(expanded);
+            if (!string.IsNullOrEmpty(fileName))
+            {
+                string candidate = Path.Combine(_configService.IconsFolder, fileName);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+
+            return rawPath;
         }
 
         public Bitmap GetItemBitmap(BinItem item)
@@ -107,7 +127,8 @@ namespace WinBins.Services
 
             if (bin.IconMode == BinIconMode.CustomIcon && !string.IsNullOrWhiteSpace(bin.CustomIconPath))
             {
-                Bitmap custom = Win32Interop.ExtractHighResIconBitmap(bin.CustomIconPath, bin.CustomIconIndex, 128);
+                string resolvedCustom = ResolveCustomIconPathWithFallback(bin.CustomIconPath);
+                Bitmap custom = Win32Interop.ExtractHighResIconBitmap(resolvedCustom, bin.CustomIconIndex, 128);
                 if (custom != null)
                 {
                     Bitmap resized = Win32Interop.ResizeToSquareBitmap(custom, 128);
@@ -129,7 +150,7 @@ namespace WinBins.Services
                 }
             }
 
-            return Win32Interop.CreateGroupMosaicBitmap(subIcons);
+            return Win32Interop.CreateGroupMosaicBitmap(subIcons, bin.ShowMosaicBackplate);
         }
 
         /// <summary>
@@ -141,7 +162,8 @@ namespace WinBins.Services
         {
             if (bin != null && bin.IconMode == BinIconMode.CustomIcon && !string.IsNullOrWhiteSpace(bin.CustomIconPath))
             {
-                using (Bitmap custom = Win32Interop.ExtractHighResIconBitmap(bin.CustomIconPath, bin.CustomIconIndex, 128))
+                string resolvedCustom = ResolveCustomIconPathWithFallback(bin.CustomIconPath);
+                using (Bitmap custom = Win32Interop.ExtractHighResIconBitmap(resolvedCustom, bin.CustomIconIndex, 128))
                 {
                     if (custom != null)
                     {
@@ -166,7 +188,7 @@ namespace WinBins.Services
                 }
             }
 
-            return Win32Interop.CreateGroupMosaicIconHandle(subIcons);
+            return Win32Interop.CreateGroupMosaicIconHandle(subIcons, bin?.ShowMosaicBackplate ?? false);
         }
 
         public IntPtr CreateBinSmallIconHandle(BinGroup bin, int size = 32)
@@ -188,7 +210,7 @@ namespace WinBins.Services
                 return $"Custom|{bin.CustomIconPath}|{bin.CustomIconIndex}";
             }
 
-            var sb = new System.Text.StringBuilder("Grid");
+            var sb = new System.Text.StringBuilder(bin.ShowMosaicBackplate ? "GridPlate" : "Grid");
             if (bin.Items != null)
             {
                 for (int i = 0; i < bin.Items.Count && i < 4; i++)

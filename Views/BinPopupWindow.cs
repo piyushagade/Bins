@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Windows;
@@ -10,6 +11,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Shell;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using WinBins.Interop;
 using WinBins.Models;
@@ -19,9 +21,12 @@ namespace WinBins.Views
 {
     public class BinPopupWindow : Window
     {
+        public const string InternalTileDragFormat = "WinBins.PopupTileIndex";
+
         private readonly ConfigService _configService;
         private readonly IconService _iconService;
         private readonly RunningAppsTaskbarManager _runningAppsManager;
+        private readonly TaskbarBinHostManager _taskbarManager;
         private readonly Action<BinGroup> _onCustomizeRequested;
         private readonly Action<BinGroup> _onBinModified;
 
@@ -34,19 +39,40 @@ namespace WinBins.Views
         private readonly TextBlock _headerTitle;
         private readonly Button _addBtn;
         private readonly Button _editBtn;
+
+        private readonly Border _filterBar;
+        private readonly TextBlock _filterTextBlock;
         private readonly ScrollViewer _gridScroll;
         private readonly UniformGrid _itemsGrid;
         private readonly Border _emptyStatePanel;
-        private readonly Border _dropOverlay;
+        private readonly TextBlock _emptyTitleText;
+        private readonly TextBlock _emptySubText;
+        private readonly Border _dropHintBanner;
+        private readonly TextBlock _dropHintText;
+
+        private readonly DispatcherTimer _hoverDismissTimer;
+        private bool _openedByHover;
+        private int _hoverOutsideStartTick;
 
         private BinGroup _currentBin;
         private IntPtr _priorForegroundHwnd;
         private bool _suppressDeactivateClose;
 
+        private string _filterText = string.Empty;
+        private int _selectedTileIndex = -1;
+        private readonly List<TileEntry> _displayedTiles = new List<TileEntry>();
+
         // Toggle-guard state so clicking the same taskbar icon while open closes cleanly instead of reopening
         private string _lastDeactivatedBinId;
         private long _lastDeactivatedTick;
         private System.Drawing.Point _lastDeactivatedCursor;
+
+        private class TileEntry
+        {
+            public BinItem Item;
+            public int OriginalIndex;
+            public Border TileBorder;
+        }
 
         public string CurrentBinId => _currentBin?.Id;
 
@@ -54,12 +80,14 @@ namespace WinBins.Views
             ConfigService configService,
             IconService iconService,
             RunningAppsTaskbarManager runningAppsManager,
+            TaskbarBinHostManager taskbarManager,
             Action<BinGroup> onCustomizeRequested,
             Action<BinGroup> onBinModified)
         {
             _configService = configService;
             _iconService = iconService;
             _runningAppsManager = runningAppsManager;
+            _taskbarManager = taskbarManager;
             _onCustomizeRequested = onCustomizeRequested;
             _onBinModified = onBinModified;
 
@@ -69,7 +97,7 @@ namespace WinBins.Views
             ShowInTaskbar = false;
             Topmost = true;
             SizeToContent = SizeToContent.WidthAndHeight;
-            Background = FluentTheme.PopupBg;
+            Background = Brushes.Transparent;
             Foreground = FluentTheme.TextPrimary;
             FontFamily = FluentTheme.BodyFont;
             AllowDrop = true;
@@ -78,18 +106,40 @@ namespace WinBins.Views
             {
                 CaptionHeight = 0,
                 ResizeBorderThickness = new Thickness(0),
-                GlassFrameThickness = new Thickness(0),
+                GlassFrameThickness = new Thickness(-1),
                 CornerRadius = new CornerRadius(0)
             });
 
             SourceInitialized += (_, __) =>
             {
                 IntPtr hwnd = new WindowInteropHelper(this).Handle;
-                Win32Interop.ApplyWindows11WindowStyling(hwnd);
+                ApplyPopupDwmStyling(hwnd);
                 int one = 1;
                 Win32Interop.DwmSetWindowAttribute(hwnd, Win32Interop.DWMWA_DISALLOW_PEEK, ref one, sizeof(int));
                 Win32Interop.DwmSetWindowAttribute(hwnd, Win32Interop.DWMWA_EXCLUDED_FROM_PEEK, ref one, sizeof(int));
             };
+
+            FluentTheme.ThemeChanged += () =>
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    IntPtr hwnd = new WindowInteropHelper(this).Handle;
+                    if (hwnd != IntPtr.Zero)
+                    {
+                        ApplyPopupDwmStyling(hwnd);
+                    }
+                    if (IsVisible && _currentBin != null)
+                    {
+                        RebuildContent();
+                    }
+                }));
+            };
+
+            _hoverDismissTimer = new DispatcherTimer(DispatcherPriority.Input)
+            {
+                Interval = TimeSpan.FromMilliseconds(120)
+            };
+            _hoverDismissTimer.Tick += HoverDismissTimer_Tick;
 
             _slideTransform = new TranslateTransform(0, 0);
             _animRoot = new Grid
@@ -104,7 +154,7 @@ namespace WinBins.Views
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(8),
                 Padding = new Thickness(10, 10, 10, 10),
-                MinWidth = 100
+                MinWidth = 110
             };
             _outerBorder.MouseRightButtonUp += OuterBorder_MouseRightButtonUp;
 
@@ -180,6 +230,52 @@ namespace WinBins.Views
             _headerDock.Children.Add(_titleGroup);
             mainStack.Children.Add(_headerDock);
 
+            // Type-to-filter inline search pill (visible only when user types)
+            _filterBar = new Border
+            {
+                Background = FluentTheme.InputBg,
+                BorderBrush = FluentTheme.SubtleBorder,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(8, 4, 6, 4),
+                Margin = new Thickness(2, 0, 2, 6),
+                Visibility = Visibility.Collapsed
+            };
+            var filterDock = new DockPanel { LastChildFill = true };
+            var clearFilterBtn = FluentTheme.CreateIconButton("\uE711", "Clear filter (Esc)", size: 20, iconSize: 9.5);
+            clearFilterBtn.Click += (_, __) =>
+            {
+                _filterText = string.Empty;
+                _selectedTileIndex = -1;
+                RebuildContent();
+                UpdateLayout();
+            };
+            DockPanel.SetDock(clearFilterBtn, Dock.Right);
+            filterDock.Children.Add(clearFilterBtn);
+
+            var searchIcon = new TextBlock
+            {
+                Text = "\uE721",
+                FontFamily = FluentTheme.IconFont,
+                FontSize = 11.5,
+                Foreground = FluentTheme.AccentBrush,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0)
+            };
+            DockPanel.SetDock(searchIcon, Dock.Left);
+            filterDock.Children.Add(searchIcon);
+
+            _filterTextBlock = new TextBlock
+            {
+                FontSize = 12,
+                Foreground = FluentTheme.TextPrimary,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            filterDock.Children.Add(_filterTextBlock);
+            _filterBar.Child = filterDock;
+            mainStack.Children.Add(_filterBar);
+
             // Empty state panel
             _emptyStatePanel = new Border
             {
@@ -187,22 +283,24 @@ namespace WinBins.Views
                 Visibility = Visibility.Collapsed
             };
             var emptyStack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
-            emptyStack.Children.Add(new TextBlock
+            _emptyTitleText = new TextBlock
             {
                 Text = "Empty Bin",
                 FontSize = 13,
                 FontWeight = FontWeights.SemiBold,
                 Foreground = FluentTheme.TextSecondary,
                 HorizontalAlignment = HorizontalAlignment.Center
-            });
-            emptyStack.Children.Add(new TextBlock
+            };
+            _emptySubText = new TextBlock
             {
                 Text = "Drop items here or right-click to add",
                 FontSize = 12,
                 Foreground = FluentTheme.TextMuted,
                 TextAlignment = TextAlignment.Center,
                 Margin = new Thickness(0, 4, 0, 0)
-            });
+            };
+            emptyStack.Children.Add(_emptyTitleText);
+            emptyStack.Children.Add(_emptySubText);
             _emptyStatePanel.Child = emptyStack;
             mainStack.Children.Add(_emptyStatePanel);
 
@@ -222,38 +320,54 @@ namespace WinBins.Views
             };
             mainStack.Children.Add(_gridScroll);
 
-            _animRoot.Children.Add(mainStack);
-
-            // Drag & drop highlight overlay
-            _dropOverlay = new Border
+            // Non-blocking contextual drop hint banner (keeps all tiles visible so user can drop onto an App or Folder tile!)
+            _dropHintBanner = new Border
             {
-                Background = FluentTheme.BrushFromHex("#DC202020"),
+                Background = FluentTheme.CardSelectedBg,
                 BorderBrush = FluentTheme.AccentBrush,
-                BorderThickness = new Thickness(1.5),
-                CornerRadius = new CornerRadius(6),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(5),
+                Padding = new Thickness(8, 4, 8, 4),
+                Margin = new Thickness(2, 6, 2, 0),
                 Visibility = Visibility.Collapsed,
-                IsHitTestVisible = false,
-                Child = new TextBlock
-                {
-                    Text = "Drop to add",
-                    FontFamily = FluentTheme.DisplayFont,
-                    FontSize = 14,
-                    FontWeight = FontWeights.SemiBold,
-                    Foreground = FluentTheme.TextPrimary,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
-                }
+                IsHitTestVisible = false
             };
-            _animRoot.Children.Add(_dropOverlay);
+            _dropHintText = new TextBlock
+            {
+                Text = "Drop to add to Bin",
+                FontSize = 11.5,
+                FontWeight = FontWeights.Medium,
+                Foreground = FluentTheme.TextPrimary,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            _dropHintBanner.Child = _dropHintText;
+            mainStack.Children.Add(_dropHintBanner);
+
+            _animRoot.Children.Add(mainStack);
 
             _outerBorder.Child = _animRoot;
             Content = _outerBorder;
 
             Deactivated += BinPopupWindow_Deactivated;
             PreviewKeyDown += BinPopupWindow_PreviewKeyDown;
-            DragEnter += BinPopupWindow_DragEnter;
-            DragLeave += (_, __) => _dropOverlay.Visibility = Visibility.Collapsed;
+            PreviewTextInput += BinPopupWindow_PreviewTextInput;
+            DragOver += BinPopupWindow_DragOver;
+            DragLeave += BinPopupWindow_DragLeave;
             Drop += BinPopupWindow_Drop;
+        }
+
+        private void ApplyPopupDwmStyling(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero)
+                return;
+
+            bool useAcrylic = _configService.Current?.UseAcrylicFlyout ?? true;
+            Win32Interop.ApplyWindows11WindowStyling(
+                hwnd,
+                useMica: false,
+                useAcrylic: useAcrylic,
+                forceDarkMode: !FluentTheme.IsLightThemeActive);
         }
 
         public void ToggleAtScreenPoint(BinGroup bin, System.Drawing.Point anchorScreenPx)
@@ -281,13 +395,24 @@ namespace WinBins.Views
                 }
             }
 
-            ShowForBin(bin, anchorScreenPx);
+            ShowForBin(bin, anchorScreenPx, openedByHover: false);
         }
 
-        public void ShowForBin(BinGroup bin, System.Drawing.Point anchorScreenPx)
+        public void ShowForBin(BinGroup bin, System.Drawing.Point anchorScreenPx, bool openedByHover = false)
         {
             if (bin == null)
                 return;
+
+            // If already showing this exact Bin from hover, just update hover state without restarting entrance animation
+            if (IsVisible && string.Equals(_currentBin?.Id, bin.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!openedByHover)
+                {
+                    _openedByHover = false;
+                    _hoverDismissTimer.Stop();
+                }
+                return;
+            }
 
             IntPtr currentFg = Win32Interop.GetForegroundWindow();
             IntPtr ownHwnd = new WindowInteropHelper(this).Handle;
@@ -297,6 +422,11 @@ namespace WinBins.Views
             }
 
             _currentBin = bin;
+            _filterText = string.Empty;
+            _selectedTileIndex = -1;
+            _openedByHover = openedByHover;
+            _hoverOutsideStartTick = 0;
+
             RebuildContent();
 
             if (!IsVisible)
@@ -312,13 +442,84 @@ namespace WinBins.Views
             IntPtr hwnd = new WindowInteropHelper(this).Handle;
             if (hwnd != IntPtr.Zero)
             {
-                Win32Interop.ApplyWindows11WindowStyling(hwnd);
-                Win32Interop.SetForegroundWindow(hwnd);
+                ApplyPopupDwmStyling(hwnd);
+                if (!openedByHover)
+                {
+                    Win32Interop.SetForegroundWindow(hwnd);
+                }
             }
-            Activate();
-            Focus();
+
+            if (openedByHover)
+            {
+                _hoverDismissTimer.Start();
+            }
+            else
+            {
+                _hoverDismissTimer.Stop();
+                Activate();
+                Focus();
+            }
 
             PlayEntranceAnimation();
+        }
+
+        private void HoverDismissTimer_Tick(object sender, EventArgs e)
+        {
+            if (!IsVisible || !_openedByHover || _currentBin == null)
+            {
+                _hoverDismissTimer.Stop();
+                return;
+            }
+
+            // Never auto-dismiss while a context menu/dialog is open, user is dragging, or user started typing a filter
+            bool leftDown = (Win32Interop.GetAsyncKeyState(Win32Interop.VK_LBUTTON) & 0x8000) != 0;
+            if (_suppressDeactivateClose || leftDown || !string.IsNullOrEmpty(_filterText))
+            {
+                _hoverOutsideStartTick = 0;
+                return;
+            }
+
+            if (!Win32Interop.GetCursorPos(out Win32Interop.POINT pt))
+                return;
+
+            bool insideSafeZone = false;
+            IntPtr hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd != IntPtr.Zero && Win32Interop.GetWindowRect(hwnd, out Win32Interop.RECT popupRect))
+            {
+                const int pad = 16;
+                if (pt.X >= popupRect.Left - pad && pt.X <= popupRect.Right + pad &&
+                    pt.Y >= popupRect.Top - pad && pt.Y <= popupRect.Bottom + 24)
+                {
+                    insideSafeZone = true;
+                }
+            }
+
+            if (!insideSafeZone && _taskbarManager != null &&
+                _taskbarManager.TryGetBinTaskbarRect(_currentBin.Id, out Rect btnRect))
+            {
+                const double btnPad = 14;
+                if (pt.X >= btnRect.Left - btnPad && pt.X <= btnRect.Right + btnPad &&
+                    pt.Y >= btnRect.Top - 24 && pt.Y <= btnRect.Bottom + btnPad)
+                {
+                    insideSafeZone = true;
+                }
+            }
+
+            if (insideSafeZone)
+            {
+                _hoverOutsideStartTick = 0;
+            }
+            else
+            {
+                if (_hoverOutsideStartTick == 0)
+                {
+                    _hoverOutsideStartTick = Environment.TickCount;
+                }
+                else if (Math.Abs(Environment.TickCount - _hoverOutsideStartTick) >= 340)
+                {
+                    HidePopup();
+                }
+            }
         }
 
         public void RefreshIfShowing(BinGroup bin)
@@ -333,10 +534,27 @@ namespace WinBins.Views
 
         public void HidePopup()
         {
-            _dropOverlay.Visibility = Visibility.Collapsed;
+            _hoverDismissTimer.Stop();
+            _openedByHover = false;
+            ShowDropHint(null, highlightOuterBorder: false);
             if (IsVisible)
             {
                 Hide();
+            }
+        }
+
+        private void ShowDropHint(string message, bool highlightOuterBorder)
+        {
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                _dropHintBanner.Visibility = Visibility.Collapsed;
+                _outerBorder.BorderBrush = FluentTheme.SubtleBorder;
+            }
+            else
+            {
+                _dropHintText.Text = message;
+                _dropHintBanner.Visibility = Visibility.Visible;
+                _outerBorder.BorderBrush = highlightOuterBorder ? FluentTheme.AccentBrush : FluentTheme.SubtleBorder;
             }
         }
 
@@ -399,16 +617,47 @@ namespace WinBins.Views
 
             _headerTitle.Text = _currentBin.Name;
 
+            bool hasFilter = !string.IsNullOrWhiteSpace(_filterText);
+            _filterBar.Visibility = hasFilter ? Visibility.Visible : Visibility.Collapsed;
+            if (hasFilter)
+            {
+                _filterTextBlock.Text = _filterText;
+            }
+
             int pad = Math.Max(0, Math.Min(20, _currentBin.ItemPadding));
             double outerSide = Math.Max(6, 6 + pad * 0.6);
-            double outerTop = anyHeader ? 9 : outerSide;
+            double outerTop = (anyHeader || hasFilter) ? 9 : outerSide;
             _outerBorder.Padding = new Thickness(outerSide, outerTop, outerSide, outerSide);
 
-            int count = _currentBin.Items?.Count ?? 0;
             _itemsGrid.Children.Clear();
+            _displayedTiles.Clear();
 
-            if (count == 0)
+            var allItems = _currentBin.Items ?? new List<BinItem>();
+            if (allItems.Count == 0)
             {
+                _emptyTitleText.Text = "Empty Bin";
+                _emptySubText.Text = "Drop items here or right-click to add";
+                _emptyStatePanel.Visibility = Visibility.Visible;
+                _gridScroll.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            var matching = new List<Tuple<BinItem, int>>();
+            for (int i = 0; i < allItems.Count; i++)
+            {
+                BinItem it = allItems[i];
+                if (!hasFilter ||
+                    (!string.IsNullOrEmpty(it.Name) && it.Name.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                    (!string.IsNullOrEmpty(it.TargetPath) && it.TargetPath.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0))
+                {
+                    matching.Add(Tuple.Create(it, i));
+                }
+            }
+
+            if (matching.Count == 0)
+            {
+                _emptyTitleText.Text = "No matching items";
+                _emptySubText.Text = "Press Esc to clear filter";
                 _emptyStatePanel.Visibility = Visibility.Visible;
                 _gridScroll.Visibility = Visibility.Collapsed;
                 return;
@@ -417,8 +666,17 @@ namespace WinBins.Views
             _emptyStatePanel.Visibility = Visibility.Collapsed;
             _gridScroll.Visibility = Visibility.Visible;
 
+            if (hasFilter && (_selectedTileIndex < 0 || _selectedTileIndex >= matching.Count))
+            {
+                _selectedTileIndex = 0;
+            }
+            else if (_selectedTileIndex >= matching.Count)
+            {
+                _selectedTileIndex = matching.Count - 1;
+            }
+
             int cols = Math.Max(1, Math.Min(10, _currentBin.Columns));
-            _itemsGrid.Columns = Math.Min(cols, Math.Max(1, count));
+            _itemsGrid.Columns = Math.Min(cols, Math.Max(1, matching.Count));
 
             GetDensityMetrics(out double iconSize, out double baseTileW, out double baseTileH, out double fontSize, out double labelMaxH);
             double tileW = baseTileW + pad * 1.2;
@@ -435,17 +693,49 @@ namespace WinBins.Views
                 _gridScroll.MaxHeight = 440;
             }
 
-            for (int i = 0; i < _currentBin.Items.Count; i++)
+            for (int displayIdx = 0; displayIdx < matching.Count; displayIdx++)
             {
-                BinItem item = _currentBin.Items[i];
-                int index = i;
-                _itemsGrid.Children.Add(CreateItemTile(item, index, iconSize, tileW, tileH, marginHalf, pad, fontSize, labelMaxH));
+                BinItem item = matching[displayIdx].Item1;
+                int originalIndex = matching[displayIdx].Item2;
+                Border tileBorder = CreateItemTile(
+                    item,
+                    originalIndex,
+                    displayIdx,
+                    iconSize,
+                    tileW,
+                    tileH,
+                    marginHalf,
+                    pad,
+                    fontSize,
+                    labelMaxH);
+
+                _displayedTiles.Add(new TileEntry
+                {
+                    Item = item,
+                    OriginalIndex = originalIndex,
+                    TileBorder = tileBorder
+                });
+                _itemsGrid.Children.Add(tileBorder);
+            }
+
+            ApplySelectionVisuals();
+        }
+
+        private void ApplySelectionVisuals()
+        {
+            for (int i = 0; i < _displayedTiles.Count; i++)
+            {
+                Border b = _displayedTiles[i].TileBorder;
+                bool selected = (i == _selectedTileIndex);
+                b.Background = selected ? FluentTheme.CardSelectedBg : Brushes.Transparent;
+                b.BorderBrush = selected ? FluentTheme.AccentBrush : Brushes.Transparent;
             }
         }
 
-        private UIElement CreateItemTile(
+        private Border CreateItemTile(
             BinItem item,
-            int index,
+            int originalIndex,
+            int displayIdx,
             double iconSize,
             double tileW,
             double tileH,
@@ -458,22 +748,30 @@ namespace WinBins.Views
             bool isRunning = runningWindows.Count > 0;
             bool wasActiveApp = isRunning && runningWindows.Any(w => w.Hwnd == _priorForegroundHwnd && !w.IsMinimized);
 
+            string targetExpanded = Environment.ExpandEnvironmentVariables((item.TargetPath ?? string.Empty).Trim());
+            bool isFolder = item.Kind == BinItemKind.Folder || (!string.IsNullOrEmpty(targetExpanded) && Directory.Exists(targetExpanded));
+            bool isWebUrl = item.Kind == BinItemKind.WebUrl || BinItem.IsWebUrl(targetExpanded);
+
             double innerVPad = Math.Max(3, 4 + pad * 0.35);
+            string keyHint = displayIdx < 9 ? $" [{displayIdx + 1}]" : string.Empty;
             string tooltipText = isRunning
                 ? (runningWindows.Count == 1
-                    ? $"{item.Name} (Running)"
-                    : $"{item.Name} ({runningWindows.Count} windows open)")
-                : item.Name;
+                    ? $"{item.Name}{keyHint} (Running)"
+                    : $"{item.Name}{keyHint} ({runningWindows.Count} windows open)")
+                : $"{item.Name}{keyHint}";
 
             var tile = new Border
             {
                 Width = tileW,
                 Height = tileH,
                 Background = Brushes.Transparent,
+                BorderBrush = Brushes.Transparent,
+                BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(6),
                 Padding = new Thickness(0),
                 Margin = new Thickness(marginHalf),
                 Cursor = Cursors.Hand,
+                AllowDrop = true,
                 ToolTip = tooltipText
             };
 
@@ -528,47 +826,119 @@ namespace WinBins.Views
                 tileOverlayGrid.Children.Add(runningPill);
             }
 
+            // Quick Folder Peek hover chevron button on Folder tiles
+            Border peekBtn = null;
+            if (isFolder)
+            {
+                peekBtn = new Border
+                {
+                    Width = 20,
+                    Height = 20,
+                    CornerRadius = new CornerRadius(4),
+                    Background = FluentTheme.CardBg,
+                    BorderBrush = FluentTheme.SubtleBorder,
+                    BorderThickness = new Thickness(1),
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Top,
+                    Margin = new Thickness(0, 3, 3, 0),
+                    Opacity = 0,
+                    Cursor = Cursors.Hand,
+                    ToolTip = $"Peek inside {item.Name}",
+                    Child = new TextBlock
+                    {
+                        Text = "\uE76C",
+                        FontFamily = FluentTheme.IconFont,
+                        FontSize = 9.5,
+                        Foreground = FluentTheme.TextSecondary,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                };
+
+                peekBtn.MouseLeftButtonDown += (s, e) => e.Handled = true;
+                peekBtn.MouseLeftButtonUp += (s, e) =>
+                {
+                    OpenFolderPeekPopupMenu(peekBtn, targetExpanded);
+                    e.Handled = true;
+                };
+
+                tileOverlayGrid.Children.Add(peekBtn);
+            }
+
             tile.Child = tileOverlayGrid;
 
-            tile.MouseEnter += (_, __) => tile.Background = FluentTheme.SubtleHoverBg;
-            tile.MouseLeave += (_, __) => tile.Background = Brushes.Transparent;
+            Point? dragStartPoint = null;
+            bool didDrag = false;
+
+            tile.MouseEnter += (_, __) =>
+            {
+                if (_selectedTileIndex != displayIdx)
+                    tile.Background = FluentTheme.SubtleHoverBg;
+                if (peekBtn != null)
+                    peekBtn.Opacity = 1;
+            };
+            tile.MouseLeave += (_, __) =>
+            {
+                bool selected = (_selectedTileIndex == displayIdx);
+                tile.Background = selected ? FluentTheme.CardSelectedBg : Brushes.Transparent;
+                tile.BorderBrush = selected ? FluentTheme.AccentBrush : Brushes.Transparent;
+                if (peekBtn != null)
+                    peekBtn.Opacity = 0;
+            };
+
+            tile.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                // If user opened flyout via hover and clicks inside, promote to interactive focus
+                if (_openedByHover)
+                {
+                    _openedByHover = false;
+                    _hoverDismissTimer.Stop();
+                    Activate();
+                }
+                dragStartPoint = e.GetPosition(this);
+                didDrag = false;
+            };
+
+            tile.MouseMove += (s, e) =>
+            {
+                if (e.LeftButton == MouseButtonState.Pressed &&
+                    dragStartPoint.HasValue &&
+                    string.IsNullOrEmpty(_filterText))
+                {
+                    Point pos = e.GetPosition(this);
+                    if (Math.Abs(pos.X - dragStartPoint.Value.X) > 7 ||
+                        Math.Abs(pos.Y - dragStartPoint.Value.Y) > 7)
+                    {
+                        didDrag = true;
+                        dragStartPoint = null;
+                        _suppressDeactivateClose = true;
+                        try
+                        {
+                            var data = new DataObject(InternalTileDragFormat, originalIndex);
+                            DragDrop.DoDragDrop(tile, data, DragDropEffects.Move);
+                        }
+                        finally
+                        {
+                            _suppressDeactivateClose = false;
+                            ShowDropHint(null, highlightOuterBorder: false);
+                            if (IsVisible)
+                                Activate();
+                        }
+                    }
+                }
+            };
 
             tile.MouseLeftButtonUp += (s, e) =>
             {
-                bool ctrlHeld = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
-                bool shiftHeld = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
-                bool keepOpen = shiftHeld || !(_configService.Current?.ClosePopupOnLaunch ?? true);
-
-                List<RunningWindowEntry> liveWindows = !ctrlHeld
-                    ? (_runningAppsManager?.GetRunningWindowsForItem(item) ?? new List<RunningWindowEntry>())
-                    : null;
-
-                if (!keepOpen)
+                dragStartPoint = null;
+                if (didDrag)
                 {
-                    HidePopup();
+                    didDrag = false;
+                    e.Handled = true;
+                    return;
                 }
 
-                if (liveWindows != null && liveWindows.Count > 0)
-                {
-                    // Activate existing running window (cycling to the next window if multiple are open and first was active)
-                    RunningWindowEntry targetWin = liveWindows[0];
-                    if (liveWindows.Count > 1)
-                    {
-                        int priorIdx = liveWindows.FindIndex(w => w.Hwnd == _priorForegroundHwnd && !w.IsMinimized);
-                        if (priorIdx >= 0)
-                        {
-                            targetWin = liveWindows[(priorIdx + 1) % liveWindows.Count];
-                        }
-                    }
-
-                    Win32Interop.ActivateAndRestoreWindow(targetWin.Hwnd);
-                    _priorForegroundHwnd = targetWin.Hwnd;
-                }
-                else
-                {
-                    LauncherService.LaunchItem(item);
-                }
-
+                ActivateOrLaunchTileItem(item);
                 e.Handled = true;
             };
 
@@ -587,11 +957,337 @@ namespace WinBins.Views
 
             tile.MouseRightButtonUp += (s, e) =>
             {
-                OpenTileContextMenu(tile, item, index);
+                OpenTileContextMenu(tile, item, originalIndex, isFolder ? targetExpanded : null);
                 e.Handled = true;
             };
 
+            // Tile-level Drag & Drop:
+            // 1) Internal tile reordering
+            // 2) Dropping files onto a Folder tile moves/copies into that folder
+            // 3) Dropping files onto an App/Shortcut tile opens those files with that app (unless Alt held or dropping .lnk shortcuts to add)
+            tile.DragOver += (s, e) =>
+            {
+                if (e.Data.GetDataPresent(InternalTileDragFormat))
+                {
+                    int fromIdx = (int)e.Data.GetData(InternalTileDragFormat);
+                    if (fromIdx != originalIndex)
+                    {
+                        e.Effects = DragDropEffects.Move;
+                        tile.BorderBrush = FluentTheme.AccentBrush;
+                        tile.Background = FluentTheme.CardSelectedBg;
+                        ShowDropHint($"Move to position {originalIndex + 1}", highlightOuterBorder: false);
+                    }
+                    else
+                    {
+                        e.Effects = DragDropEffects.None;
+                    }
+                    e.Handled = true;
+                    return;
+                }
+
+                bool altHeld = (Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt;
+                if (!altHeld && e.Data.GetDataPresent(DataFormats.FileDrop) &&
+                    e.Data.GetData(DataFormats.FileDrop) is string[] droppedFiles &&
+                    droppedFiles.Length > 0)
+                {
+                    if (isFolder)
+                    {
+                        bool ctrlHeld = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
+                        e.Effects = ctrlHeld ? DragDropEffects.Copy : DragDropEffects.Move;
+                        tile.BorderBrush = FluentTheme.AccentBrush;
+                        tile.Background = FluentTheme.CardSelectedBg;
+                        string verb = ctrlHeld ? "Copy" : "Move";
+                        string noun = droppedFiles.Length == 1 ? Path.GetFileName(droppedFiles[0]) : $"{droppedFiles.Length} items";
+                        ShowDropHint($"{verb} {noun} into \"{item.Name}\" (Ctrl = Copy, Alt = Add to Bin)", highlightOuterBorder: false);
+                        e.Handled = true;
+                        return;
+                    }
+
+                    // If dropping non-.lnk/.exe documents onto an App tile, open with that app!
+                    bool allShortcutsOrExes = droppedFiles.All(f =>
+                    {
+                        string ext = Path.GetExtension(f)?.ToLowerInvariant();
+                        return ext == ".lnk" || ext == ".exe" || ext == ".appref-ms";
+                    });
+
+                    if (!isWebUrl && !allShortcutsOrExes)
+                    {
+                        e.Effects = DragDropEffects.Copy;
+                        tile.BorderBrush = FluentTheme.AccentBrush;
+                        tile.Background = FluentTheme.CardSelectedBg;
+                        string noun = droppedFiles.Length == 1 ? Path.GetFileName(droppedFiles[0]) : $"{droppedFiles.Length} files";
+                        ShowDropHint($"Open {noun} with {item.Name} (Alt = Add to Bin)", highlightOuterBorder: false);
+                        e.Handled = true;
+                        return;
+                    }
+                }
+            };
+
+            tile.DragLeave += (s, e) =>
+            {
+                bool selected = (_selectedTileIndex == displayIdx);
+                tile.BorderBrush = selected ? FluentTheme.AccentBrush : Brushes.Transparent;
+                tile.Background = selected ? FluentTheme.CardSelectedBg : Brushes.Transparent;
+            };
+
+            tile.Drop += (s, e) =>
+            {
+                tile.BorderBrush = Brushes.Transparent;
+                tile.Background = Brushes.Transparent;
+                ShowDropHint(null, highlightOuterBorder: false);
+
+                if (e.Data.GetDataPresent(InternalTileDragFormat))
+                {
+                    int fromIdx = (int)e.Data.GetData(InternalTileDragFormat);
+                    if (fromIdx != originalIndex)
+                    {
+                        MoveItem(fromIdx, originalIndex);
+                    }
+                    e.Handled = true;
+                    return;
+                }
+
+                bool altHeld = (Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt;
+                if (!altHeld && e.Data.GetDataPresent(DataFormats.FileDrop) &&
+                    e.Data.GetData(DataFormats.FileDrop) is string[] droppedFiles &&
+                    droppedFiles.Length > 0)
+                {
+                    if (isFolder)
+                    {
+                        bool ctrlHeld = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
+                        HidePopup();
+                        Win32Interop.ShellCopyOrMoveFilesToFolder(droppedFiles, targetExpanded, copy: ctrlHeld);
+                        e.Handled = true;
+                        return;
+                    }
+
+                    bool allShortcutsOrExes = droppedFiles.All(f =>
+                    {
+                        string ext = Path.GetExtension(f)?.ToLowerInvariant();
+                        return ext == ".lnk" || ext == ".exe" || ext == ".appref-ms";
+                    });
+
+                    if (!isWebUrl && !allShortcutsOrExes)
+                    {
+                        if (_configService.Current?.ClosePopupOnLaunch ?? true)
+                        {
+                            HidePopup();
+                        }
+                        LauncherService.LaunchItemWithFiles(item, droppedFiles);
+                        e.Handled = true;
+                        return;
+                    }
+                }
+            };
+
             return tile;
+        }
+
+        private void ActivateOrLaunchTileItem(BinItem item)
+        {
+            if (item == null)
+                return;
+
+            bool ctrlHeld = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
+            bool shiftHeld = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+            bool keepOpen = shiftHeld || !(_configService.Current?.ClosePopupOnLaunch ?? true);
+
+            List<RunningWindowEntry> liveWindows = !ctrlHeld
+                ? (_runningAppsManager?.GetRunningWindowsForItem(item) ?? new List<RunningWindowEntry>())
+                : null;
+
+            if (!keepOpen)
+            {
+                HidePopup();
+            }
+
+            if (liveWindows != null && liveWindows.Count > 0)
+            {
+                RunningWindowEntry targetWin = liveWindows[0];
+                if (liveWindows.Count > 1)
+                {
+                    int priorIdx = liveWindows.FindIndex(w => w.Hwnd == _priorForegroundHwnd && !w.IsMinimized);
+                    if (priorIdx >= 0)
+                    {
+                        targetWin = liveWindows[(priorIdx + 1) % liveWindows.Count];
+                    }
+                }
+
+                Win32Interop.ActivateAndRestoreWindow(targetWin.Hwnd);
+                _priorForegroundHwnd = targetWin.Hwnd;
+            }
+            else
+            {
+                LauncherService.LaunchItem(item);
+            }
+        }
+
+        private void OpenFolderPeekPopupMenu(FrameworkElement anchor, string folderPath)
+        {
+            if (string.IsNullOrWhiteSpace(folderPath) || !Directory.Exists(folderPath))
+                return;
+
+            var menu = FluentTheme.CreateDarkContextMenu();
+            menu.PlacementTarget = anchor;
+            menu.Placement = PlacementMode.Right;
+
+            PopulateFolderPeekMenu(menu, folderPath, _iconService, () => HidePopup(), depth: 0);
+
+            _suppressDeactivateClose = true;
+            menu.Closed += (_, __) =>
+            {
+                _suppressDeactivateClose = false;
+                if (IsVisible)
+                    Activate();
+            };
+            menu.IsOpen = true;
+        }
+
+        public static void PopulateFolderPeekMenu(
+            ItemsControl parentMenu,
+            string folderPath,
+            IconService iconService,
+            Action onBeforeLaunch,
+            int depth = 0)
+        {
+            parentMenu.Items.Clear();
+
+            string folderName = Path.GetFileName(folderPath.TrimEnd(Path.DirectorySeparatorChar));
+            if (string.IsNullOrWhiteSpace(folderName))
+                folderName = folderPath;
+
+            parentMenu.Items.Add(FluentTheme.CreateMenuItem($"Open \"{folderName}\" in Explorer", () =>
+            {
+                onBeforeLaunch?.Invoke();
+                try
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = $"\"{folderPath}\"",
+                        UseShellExecute = true
+                    });
+                }
+                catch { }
+            }, iconGlyph: "\uE8B7"));
+
+            parentMenu.Items.Add(FluentTheme.CreateMenuSeparator());
+
+            List<DirectoryInfo> subDirs = new List<DirectoryInfo>();
+            List<FileInfo> files = new List<FileInfo>();
+
+            try
+            {
+                var dirInfo = new DirectoryInfo(folderPath);
+                subDirs = dirInfo.EnumerateDirectories()
+                    .Where(d => (d.Attributes & (FileAttributes.Hidden | FileAttributes.System)) == 0)
+                    .OrderBy(d => d.Name, StringComparer.CurrentCultureIgnoreCase)
+                    .Take(20)
+                    .ToList();
+
+                files = dirInfo.EnumerateFiles()
+                    .Where(f => (f.Attributes & (FileAttributes.Hidden | FileAttributes.System)) == 0)
+                    .OrderBy(f => f.Name, StringComparer.CurrentCultureIgnoreCase)
+                    .Take(25)
+                    .ToList();
+            }
+            catch
+            {
+            }
+
+            if (subDirs.Count == 0 && files.Count == 0)
+            {
+                var emptyItem = FluentTheme.CreateMenuItem("(Empty folder)", null);
+                emptyItem.IsEnabled = false;
+                parentMenu.Items.Add(emptyItem);
+                return;
+            }
+
+            foreach (DirectoryInfo subDir in subDirs)
+            {
+                string subPath = subDir.FullName;
+                if (depth < 1)
+                {
+                    var subMenuItem = new MenuItem
+                    {
+                        Header = subDir.Name,
+                        Style = FluentTheme.CreateWin11MenuItemStyle(),
+                        Icon = CreateMenuImageIcon(iconService?.GetPathImageSource(subPath))
+                    };
+                    // Lazy placeholder so cascading submenu chevron appears immediately
+                    subMenuItem.Items.Add(new MenuItem { Header = "Loading..." });
+                    bool populated = false;
+                    subMenuItem.SubmenuOpened += (_, __) =>
+                    {
+                        if (!populated)
+                        {
+                            populated = true;
+                            PopulateFolderPeekMenu(subMenuItem, subPath, iconService, onBeforeLaunch, depth + 1);
+                        }
+                    };
+                    parentMenu.Items.Add(subMenuItem);
+                }
+                else
+                {
+                    var dirItem = FluentTheme.CreateMenuItem(subDir.Name, () =>
+                    {
+                        onBeforeLaunch?.Invoke();
+                        try
+                        {
+                            Process.Start(new ProcessStartInfo
+                            {
+                                FileName = "explorer.exe",
+                                Arguments = $"\"{subPath}\"",
+                                UseShellExecute = true
+                            });
+                        }
+                        catch { }
+                    });
+                    dirItem.Icon = CreateMenuImageIcon(iconService?.GetPathImageSource(subPath));
+                    parentMenu.Items.Add(dirItem);
+                }
+            }
+
+            foreach (FileInfo file in files)
+            {
+                string filePath = file.FullName;
+                string displayName = file.Extension.Equals(".lnk", StringComparison.OrdinalIgnoreCase)
+                    ? Path.GetFileNameWithoutExtension(file.Name)
+                    : file.Name;
+
+                var fileItem = FluentTheme.CreateMenuItem(displayName, () =>
+                {
+                    onBeforeLaunch?.Invoke();
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = filePath,
+                            UseShellExecute = true
+                        });
+                    }
+                    catch { }
+                });
+                fileItem.Icon = CreateMenuImageIcon(iconService?.GetPathImageSource(filePath));
+                parentMenu.Items.Add(fileItem);
+            }
+        }
+
+        private static UIElement CreateMenuImageIcon(ImageSource source)
+        {
+            if (source == null)
+                return null;
+
+            var img = new Image
+            {
+                Width = 16,
+                Height = 16,
+                Source = source,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+            return img;
         }
 
         private void OuterBorder_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
@@ -612,7 +1308,7 @@ namespace WinBins.Views
             menu.PlacementTarget = anchor;
             menu.Placement = PlacementMode.MousePoint;
 
-            menu.Items.Add(FluentTheme.CreateMenuItem("Add Installed App...", AddFromStartMenu, iconGlyph: "\uE737"));
+            menu.Items.Add(FluentTheme.CreateMenuItem("Add Installed / Store App...", AddFromStartMenu, iconGlyph: "\uE737"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Add App or Shortcut...", AddFilesViaDialog, iconGlyph: "\uE7C3"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Add Folder...", AddFolderViaDialog, iconGlyph: "\uE8B7"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Add Website / URL...", AddUrlViaDialog, iconGlyph: "\uE774"));
@@ -678,13 +1374,15 @@ namespace WinBins.Views
             menu.IsOpen = true;
         }
 
-        private void OpenTileContextMenu(FrameworkElement target, BinItem item, int index)
+        private void OpenTileContextMenu(FrameworkElement target, BinItem item, int index, string folderPathForPeek)
         {
             var menu = FluentTheme.CreateDarkContextMenu();
             menu.PlacementTarget = target;
             menu.Placement = PlacementMode.Bottom;
 
             bool isUrl = item.Kind == BinItemKind.WebUrl || BinItem.IsWebUrl(item.TargetPath);
+            bool isPackaged = item.Kind == BinItemKind.PackagedApp || BinItem.IsPackagedApp(item.TargetPath);
+
             if (isUrl)
             {
                 menu.Items.Add(FluentTheme.CreateMenuItem("Open in browser", () =>
@@ -741,6 +1439,35 @@ namespace WinBins.Views
             }
             else
             {
+                if (!string.IsNullOrWhiteSpace(folderPathForPeek) && Directory.Exists(folderPathForPeek))
+                {
+                    var peekSubMenu = new MenuItem
+                    {
+                        Header = "Peek folder",
+                        Style = FluentTheme.CreateWin11MenuItemStyle(),
+                        Icon = new TextBlock
+                        {
+                            Text = "\uE8B7",
+                            FontFamily = FluentTheme.IconFont,
+                            FontSize = 13.5,
+                            Foreground = FluentTheme.TextSecondary,
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                            VerticalAlignment = VerticalAlignment.Center
+                        }
+                    };
+                    peekSubMenu.Items.Add(new MenuItem { Header = "Loading..." });
+                    bool populated = false;
+                    peekSubMenu.SubmenuOpened += (_, __) =>
+                    {
+                        if (!populated)
+                        {
+                            populated = true;
+                            PopulateFolderPeekMenu(peekSubMenu, folderPathForPeek, _iconService, () => HidePopup(), depth: 0);
+                        }
+                    };
+                    menu.Items.Add(peekSubMenu);
+                }
+
                 List<RunningWindowEntry> liveWindows = _runningAppsManager?.GetRunningWindowsForItem(item) ?? new List<RunningWindowEntry>();
                 if (liveWindows.Count > 0)
                 {
@@ -783,7 +1510,7 @@ namespace WinBins.Views
                     }, iconGlyph: "\uE8A7"));
                 }
 
-                if (item.Kind != BinItemKind.Folder)
+                if (item.Kind != BinItemKind.Folder && !isPackaged)
                 {
                     menu.Items.Add(FluentTheme.CreateMenuItem("Run as administrator", () =>
                     {
@@ -792,11 +1519,14 @@ namespace WinBins.Views
                     }, iconGlyph: "\uE7EF"));
                 }
 
-                menu.Items.Add(FluentTheme.CreateMenuItem("Open file location", () =>
+                if (!isPackaged)
                 {
-                    HidePopup();
-                    LauncherService.OpenItemLocation(item);
-                }, iconGlyph: "\uE8B7"));
+                    menu.Items.Add(FluentTheme.CreateMenuItem("Open file location", () =>
+                    {
+                        HidePopup();
+                        LauncherService.OpenItemLocation(item);
+                    }, iconGlyph: "\uE8B7"));
+                }
             }
 
             menu.Items.Add(FluentTheme.CreateMenuSeparator());
@@ -878,7 +1608,7 @@ namespace WinBins.Views
             }
 
             string defaultName = BinItem.DeriveDisplayName(item.TargetPath);
-            if (!string.IsNullOrWhiteSpace(defaultName) &&
+            if (!isPackaged && !string.IsNullOrWhiteSpace(defaultName) &&
                 !string.Equals(item.Name, defaultName, StringComparison.Ordinal))
             {
                 menu.Items.Add(FluentTheme.CreateMenuItem("Reset default name", () =>
@@ -947,7 +1677,7 @@ namespace WinBins.Views
             menu.PlacementTarget = btn;
             menu.Placement = PlacementMode.Bottom;
 
-            menu.Items.Add(FluentTheme.CreateMenuItem("Installed App...", AddFromStartMenu, iconGlyph: "\uE737"));
+            menu.Items.Add(FluentTheme.CreateMenuItem("Installed / Store App...", AddFromStartMenu, iconGlyph: "\uE737"));
             menu.Items.Add(FluentTheme.CreateMenuItem("App or Shortcut...", AddFilesViaDialog, iconGlyph: "\uE7C3"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Folder...", AddFolderViaDialog, iconGlyph: "\uE8B7"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Website / URL...", AddUrlViaDialog, iconGlyph: "\uE774"));
@@ -975,7 +1705,9 @@ namespace WinBins.Views
                 {
                     foreach (var app in picker.SelectedApps)
                     {
-                        var item = BinItem.FromPath(app.ShortcutPath);
+                        BinItem item = (app.IsPackagedApp || BinItem.IsPackagedApp(app.ShortcutPath))
+                            ? BinItem.FromPackagedApp(app.ShortcutPath, app.Name)
+                            : BinItem.FromPath(app.ShortcutPath);
                         item.Name = app.Name;
                         _currentBin.Items.Add(item);
                     }
@@ -1185,6 +1917,12 @@ namespace WinBins.Views
             if (targetY + popupH > work.Bottom - 10)
                 targetY = Math.Max(work.Top + margin, work.Bottom - popupH - 10);
 
+            uint swpFlags = Win32Interop.SWP_NOSIZE | Win32Interop.SWP_SHOWWINDOW;
+            if (_openedByHover)
+            {
+                swpFlags |= Win32Interop.SWP_NOACTIVATE;
+            }
+
             if (hwnd != IntPtr.Zero)
             {
                 Win32Interop.SetWindowPos(
@@ -1194,7 +1932,7 @@ namespace WinBins.Views
                     targetY,
                     0,
                     0,
-                    Win32Interop.SWP_NOSIZE | Win32Interop.SWP_SHOWWINDOW);
+                    swpFlags);
             }
             else
             {
@@ -1240,11 +1978,123 @@ namespace WinBins.Views
 
         private void BinPopupWindow_PreviewKeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Key == Key.Escape)
+            Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+
+            if (key == Key.Escape)
             {
-                HidePopup();
+                if (!string.IsNullOrEmpty(_filterText))
+                {
+                    _filterText = string.Empty;
+                    _selectedTileIndex = -1;
+                    RebuildContent();
+                    UpdateLayout();
+                }
+                else
+                {
+                    HidePopup();
+                }
                 e.Handled = true;
+                return;
             }
+
+            if (key == Key.Back && !string.IsNullOrEmpty(_filterText))
+            {
+                _filterText = _filterText.Substring(0, _filterText.Length - 1);
+                RebuildContent();
+                UpdateLayout();
+                e.Handled = true;
+                return;
+            }
+
+            // Quick launch 1..9 when filter is empty (or Alt+1..9 anytime)
+            bool altHeld = (Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt;
+            bool noCtrlWin = (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Windows)) == ModifierKeys.None;
+            if (noCtrlWin && (string.IsNullOrEmpty(_filterText) || altHeld))
+            {
+                int digit = -1;
+                if (key >= Key.D1 && key <= Key.D9)
+                    digit = (int)(key - Key.D1);
+                else if (key >= Key.NumPad1 && key <= Key.NumPad9)
+                    digit = (int)(key - Key.NumPad1);
+
+                if (digit >= 0 && digit < _displayedTiles.Count)
+                {
+                    ActivateOrLaunchTileItem(_displayedTiles[digit].Item);
+                    e.Handled = true;
+                    return;
+                }
+            }
+
+            // Arrow-key tile navigation + Enter to launch
+            int count = _displayedTiles.Count;
+            if (count > 0)
+            {
+                int cols = Math.Max(1, _itemsGrid.Columns);
+                if (key == Key.Right)
+                {
+                    _selectedTileIndex = _selectedTileIndex < 0 ? 0 : (_selectedTileIndex + 1) % count;
+                    ApplySelectionVisuals();
+                    e.Handled = true;
+                    return;
+                }
+                if (key == Key.Left)
+                {
+                    _selectedTileIndex = _selectedTileIndex <= 0 ? count - 1 : _selectedTileIndex - 1;
+                    ApplySelectionVisuals();
+                    e.Handled = true;
+                    return;
+                }
+                if (key == Key.Down)
+                {
+                    if (_selectedTileIndex < 0)
+                        _selectedTileIndex = 0;
+                    else if (_selectedTileIndex + cols < count)
+                        _selectedTileIndex += cols;
+                    ApplySelectionVisuals();
+                    e.Handled = true;
+                    return;
+                }
+                if (key == Key.Up)
+                {
+                    if (_selectedTileIndex < 0)
+                        _selectedTileIndex = 0;
+                    else if (_selectedTileIndex - cols >= 0)
+                        _selectedTileIndex -= cols;
+                    ApplySelectionVisuals();
+                    e.Handled = true;
+                    return;
+                }
+                if (key == Key.Enter)
+                {
+                    int targetIdx = _selectedTileIndex >= 0 && _selectedTileIndex < count ? _selectedTileIndex : 0;
+                    ActivateOrLaunchTileItem(_displayedTiles[targetIdx].Item);
+                    e.Handled = true;
+                    return;
+                }
+            }
+        }
+
+        private void BinPopupWindow_PreviewTextInput(object sender, TextCompositionEventArgs e)
+        {
+            if (string.IsNullOrEmpty(e.Text))
+                return;
+
+            // Ignore Ctrl/Alt shortcuts
+            if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Windows)) != ModifierKeys.None)
+                return;
+
+            char ch = e.Text[0];
+            if (char.IsControl(ch))
+                return;
+
+            // Single digit 1..9 when filter is empty is handled by PreviewKeyDown quick-launch
+            if (string.IsNullOrEmpty(_filterText) && ch >= '1' && ch <= '9')
+                return;
+
+            _filterText += e.Text;
+            RebuildContent();
+            UpdateLayout();
+            e.Handled = true;
         }
 
         private static bool TryExtractDroppedWebUrl(IDataObject data, out string normalizedUrl)
@@ -1276,23 +2126,43 @@ namespace WinBins.Views
             return false;
         }
 
-        private void BinPopupWindow_DragEnter(object sender, DragEventArgs e)
+        private void BinPopupWindow_DragOver(object sender, DragEventArgs e)
         {
+            if (e.Data.GetDataPresent(InternalTileDragFormat))
+            {
+                e.Effects = DragDropEffects.Move;
+                e.Handled = true;
+                return;
+            }
+
             if (e.Data.GetDataPresent(DataFormats.FileDrop) || TryExtractDroppedWebUrl(e.Data, out _))
             {
                 e.Effects = DragDropEffects.Copy;
-                _dropOverlay.Visibility = Visibility.Visible;
+                ShowDropHint("Drop here to add to Bin", highlightOuterBorder: true);
             }
             else
             {
                 e.Effects = DragDropEffects.None;
+                ShowDropHint(null, highlightOuterBorder: false);
             }
             e.Handled = true;
         }
 
+        private void BinPopupWindow_DragLeave(object sender, DragEventArgs e)
+        {
+            ShowDropHint(null, highlightOuterBorder: false);
+        }
+
         private void BinPopupWindow_Drop(object sender, DragEventArgs e)
         {
-            _dropOverlay.Visibility = Visibility.Collapsed;
+            ShowDropHint(null, highlightOuterBorder: false);
+
+            if (e.Data.GetDataPresent(InternalTileDragFormat))
+            {
+                e.Handled = true;
+                return;
+            }
+
             if (e.Data.GetDataPresent(DataFormats.FileDrop))
             {
                 if (e.Data.GetData(DataFormats.FileDrop) is string[] files && files.Length > 0)

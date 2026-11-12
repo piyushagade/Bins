@@ -13,28 +13,160 @@ namespace WinBins.Services
     {
         private const string RunRegistryKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string RunRegistryValueName = "WinBins";
+        private const string SyncPointerFileName = "sync_folder.txt";
 
-        public string AppDataFolder { get; }
-        public string IconsFolder { get; }
-        public string ShortcutsFolder { get; }
-        public string ConfigFilePath { get; }
+        public string BaseAppDataFolder { get; }
+        public string AppDataFolder { get; private set; }
+        public string IconsFolder { get; private set; }
+        public string ShortcutsFolder { get; private set; }
+        public string ConfigFilePath { get; private set; }
+        public string CustomSyncFolder { get; private set; }
+
+        public bool IsUsingCustomSyncFolder => !string.IsNullOrWhiteSpace(CustomSyncFolder);
 
         public AppConfig Current { get; private set; }
 
         public event Action ConfigChanged;
 
-        public ConfigService()
+        public ConfigService(string explicitBaseFolder = null)
         {
-            AppDataFolder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "WinBins");
+            BaseAppDataFolder = !string.IsNullOrWhiteSpace(explicitBaseFolder)
+                ? explicitBaseFolder
+                : Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "WinBins");
+
+            Directory.CreateDirectory(BaseAppDataFolder);
+            ShortcutsFolder = Path.Combine(BaseAppDataFolder, "Shortcuts");
+            Directory.CreateDirectory(ShortcutsFolder);
+
+            ResolveStoragePaths();
+        }
+
+        private void ResolveStoragePaths()
+        {
+            string pointerFile = Path.Combine(BaseAppDataFolder, SyncPointerFileName);
+            string customDir = null;
+            if (File.Exists(pointerFile))
+            {
+                try
+                {
+                    string candidate = Environment.ExpandEnvironmentVariables(File.ReadAllText(pointerFile, Encoding.UTF8).Trim());
+                    if (!string.IsNullOrWhiteSpace(candidate))
+                    {
+                        Directory.CreateDirectory(candidate);
+                        if (Directory.Exists(candidate))
+                        {
+                            customDir = Path.GetFullPath(candidate);
+                        }
+                    }
+                }
+                catch
+                {
+                    customDir = null;
+                }
+            }
+
+            CustomSyncFolder = customDir;
+            AppDataFolder = customDir ?? BaseAppDataFolder;
             IconsFolder = Path.Combine(AppDataFolder, "Icons");
-            ShortcutsFolder = Path.Combine(AppDataFolder, "Shortcuts");
             ConfigFilePath = Path.Combine(AppDataFolder, "config.json");
 
             Directory.CreateDirectory(AppDataFolder);
             Directory.CreateDirectory(IconsFolder);
-            Directory.CreateDirectory(ShortcutsFolder);
+        }
+
+        public bool SetSyncFolder(string targetFolder, bool copyCurrentIfTargetEmpty = true)
+        {
+            if (string.IsNullOrWhiteSpace(targetFolder))
+                return false;
+
+            try
+            {
+                string fullTarget = Path.GetFullPath(Environment.ExpandEnvironmentVariables(targetFolder.Trim()));
+                Directory.CreateDirectory(fullTarget);
+                string targetIcons = Path.Combine(fullTarget, "Icons");
+                Directory.CreateDirectory(targetIcons);
+
+                string targetConfig = Path.Combine(fullTarget, "config.json");
+                string oldConfig = ConfigFilePath;
+                string oldIcons = IconsFolder;
+
+                if (copyCurrentIfTargetEmpty && !File.Exists(targetConfig) && File.Exists(oldConfig))
+                {
+                    File.Copy(oldConfig, targetConfig, overwrite: true);
+                    if (Directory.Exists(oldIcons))
+                    {
+                        foreach (string iconFile in Directory.GetFiles(oldIcons))
+                        {
+                            string destIcon = Path.Combine(targetIcons, Path.GetFileName(iconFile));
+                            if (!File.Exists(destIcon))
+                            {
+                                try { File.Copy(iconFile, destIcon, overwrite: false); } catch { }
+                            }
+                        }
+                    }
+                }
+
+                string pointerFile = Path.Combine(BaseAppDataFolder, SyncPointerFileName);
+                if (string.Equals(fullTarget.TrimEnd('\\'), BaseAppDataFolder.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                {
+                    if (File.Exists(pointerFile))
+                        File.Delete(pointerFile);
+                }
+                else
+                {
+                    File.WriteAllText(pointerFile, fullTarget, Encoding.UTF8);
+                }
+
+                ResolveStoragePaths();
+                Load();
+                ConfigChanged?.Invoke();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public void ResetSyncFolderToDefault()
+        {
+            try
+            {
+                string pointerFile = Path.Combine(BaseAppDataFolder, SyncPointerFileName);
+                string prevConfig = ConfigFilePath;
+                string prevIcons = IconsFolder;
+
+                if (File.Exists(pointerFile))
+                {
+                    File.Delete(pointerFile);
+                }
+
+                ResolveStoragePaths();
+
+                // Copy latest synced config back to local folder if newer or missing
+                if (!string.IsNullOrEmpty(prevConfig) &&
+                    !string.Equals(prevConfig, ConfigFilePath, StringComparison.OrdinalIgnoreCase) &&
+                    File.Exists(prevConfig))
+                {
+                    try { File.Copy(prevConfig, ConfigFilePath, overwrite: true); } catch { }
+                    if (Directory.Exists(prevIcons))
+                    {
+                        foreach (string iconFile in Directory.GetFiles(prevIcons))
+                        {
+                            string destIcon = Path.Combine(IconsFolder, Path.GetFileName(iconFile));
+                            try { File.Copy(iconFile, destIcon, overwrite: true); } catch { }
+                        }
+                    }
+                }
+
+                Load();
+                ConfigChanged?.Invoke();
+            }
+            catch
+            {
+            }
         }
 
         public AppConfig Load()

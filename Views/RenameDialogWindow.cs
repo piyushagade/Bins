@@ -28,7 +28,10 @@ namespace WinBins.Views
             SourceInitialized += (_, __) =>
             {
                 IntPtr hwnd = new WindowInteropHelper(this).Handle;
-                Win32Interop.ApplyWindows11WindowStyling(hwnd);
+                Win32Interop.ApplyWindows11WindowStyling(
+                    hwnd,
+                    forceDarkMode: !FluentTheme.IsLightThemeActive,
+                    captionColorRef: FluentTheme.ActiveCaptionColorRef);
             };
 
             var root = new StackPanel { Margin = new Thickness(20, 16, 20, 18) };

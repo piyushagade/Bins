@@ -27,12 +27,21 @@ namespace WinBins.Services
         private readonly DispatcherTimer _pinSyncDebounceTimer;
         private readonly DispatcherTimer _pinFollowUpTimer;
         private readonly DispatcherTimer _taskbandStampTimer;
+        private readonly DispatcherTimer _hoverMonitorTimer;
         private FileSystemWatcher _pinnedWatcher;
         private FileSystemWatcher _implicitPinnedWatcher;
         private long _lastTaskbandStamp;
         private volatile bool _suppressWatcherEvents;
         private bool _classRegistered;
         private bool _capturingOrder;
+
+        private readonly object _buttonRectsLock = new object();
+        private Dictionary<string, System.Windows.Rect> _cachedButtonRects = new Dictionary<string, System.Windows.Rect>(StringComparer.OrdinalIgnoreCase);
+        private long _lastButtonRectScanTick;
+        private string _hoveredBinId;
+        private int _hoverEnterTick;
+        private bool _hoverFiredForCurrentStay;
+        private bool _wasLeftButtonDownOutsideTray;
 
         private class HostedBinWindow
         {
@@ -50,6 +59,7 @@ namespace WinBins.Services
         private readonly HashSet<string> _knownPinnedBinIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public event Action<BinGroup, System.Drawing.Point> BinTaskbarIconClicked;
+        public event Action<BinGroup, System.Drawing.Point, bool> BinTaskbarHoverTriggered;
         public event Action BinClosedFromTaskbar;
         public event Action TaskbarPinStateChanged;
 
@@ -98,6 +108,13 @@ namespace WinBins.Services
                 }
             };
             _taskbandStampTimer.Start();
+
+            _hoverMonitorTimer = new DispatcherTimer(DispatcherPriority.Input, _dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(95)
+            };
+            _hoverMonitorTimer.Tick += HoverMonitorTimer_Tick;
+            _hoverMonitorTimer.Start();
 
             InitializePinnedFolderWatcher();
         }
@@ -222,6 +239,7 @@ namespace WinBins.Services
             }
 
             JumpListService.SyncManagerJumpList(_configService, _iconService);
+            CaptureTaskbarOrderAsync(forceRectScan: true);
             TaskbarPinStateChanged?.Invoke();
         }
 
@@ -323,6 +341,7 @@ namespace WinBins.Services
             }
 
             JumpListService.SyncManagerJumpList(_configService, _iconService);
+            CaptureTaskbarOrderAsync(forceRectScan: true);
         }
 
         public void RefreshBin(BinGroup bin)
@@ -456,19 +475,175 @@ namespace WinBins.Services
             Win32Interop.DwmInvalidateIconicBitmaps(hwnd);
         }
 
-        private void CaptureTaskbarOrderAsync()
+        public bool TryGetBinTaskbarRect(string binId, out System.Windows.Rect screenRect)
         {
-            if (_capturingOrder || _byBinId.Count < 2)
+            screenRect = System.Windows.Rect.Empty;
+            if (string.IsNullOrWhiteSpace(binId))
+                return false;
+
+            lock (_buttonRectsLock)
+            {
+                if (_cachedButtonRects.TryGetValue(binId, out System.Windows.Rect r) && !r.IsEmpty)
+                {
+                    screenRect = r;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public bool TryGetBinTaskbarAnchorPoint(string binId, out System.Drawing.Point anchorScreenPx)
+        {
+            anchorScreenPx = System.Drawing.Point.Empty;
+            if (TryGetBinTaskbarRect(binId, out System.Windows.Rect r))
+            {
+                anchorScreenPx = new System.Drawing.Point(
+                    (int)Math.Round(r.Left + r.Width / 2.0),
+                    (int)Math.Round(r.Top + r.Height / 2.0));
+                return true;
+            }
+            return false;
+        }
+
+        private void HoverMonitorTimer_Tick(object sender, EventArgs e)
+        {
+            bool hoverEnabled = _configService.Current?.HoverToOpenFlyout == true;
+            bool leftDown = (Win32Interop.GetAsyncKeyState(Win32Interop.VK_LBUTTON) & 0x8000) != 0;
+
+            if (!Win32Interop.GetCursorPos(out Win32Interop.POINT pt))
                 return;
 
-            var activeBinIds = _byBinId.Keys.ToList();
+            IntPtr trayHwnd = Win32Interop.FindWindowExW(IntPtr.Zero, IntPtr.Zero, "Shell_TrayWnd", null);
+            bool insideTray = false;
+            if (trayHwnd != IntPtr.Zero && Win32Interop.GetWindowRect(trayHwnd, out Win32Interop.RECT trayRect))
+            {
+                insideTray = pt.X >= trayRect.Left && pt.X <= trayRect.Right &&
+                             pt.Y >= trayRect.Top && pt.Y <= trayRect.Bottom;
+            }
+
+            if (!insideTray)
+            {
+                _wasLeftButtonDownOutsideTray = leftDown;
+                _hoveredBinId = null;
+                _hoverFiredForCurrentStay = false;
+                return;
+            }
+
+            // If user released mouse button while inside tray, clear drag-origin state
+            if (!leftDown)
+            {
+                _wasLeftButtonDownOutsideTray = false;
+            }
+
+            bool isDragHoverCandidate = leftDown && _wasLeftButtonDownOutsideTray;
+            if (!hoverEnabled && !isDragHoverCandidate)
+            {
+                _hoveredBinId = null;
+                _hoverFiredForCurrentStay = false;
+                return;
+            }
+
+            // Refresh cached button rects in background if empty or older than 8 seconds
+            long nowTick = Environment.TickCount;
+            bool needRefresh;
+            string matchedBinId = null;
+            System.Windows.Rect matchedRect = System.Windows.Rect.Empty;
+
+            lock (_buttonRectsLock)
+            {
+                needRefresh = _cachedButtonRects.Count == 0 || Math.Abs(nowTick - _lastButtonRectScanTick) > 8000;
+                foreach (var kv in _cachedButtonRects)
+                {
+                    System.Windows.Rect r = kv.Value;
+                    if (pt.X >= r.Left && pt.X <= r.Right && pt.Y >= r.Top && pt.Y <= r.Bottom)
+                    {
+                        matchedBinId = kv.Key;
+                        matchedRect = r;
+                        break;
+                    }
+                }
+            }
+
+            if (needRefresh)
+            {
+                CaptureTaskbarOrderAsync(forceRectScan: true);
+            }
+
+            if (string.IsNullOrEmpty(matchedBinId))
+            {
+                _hoveredBinId = null;
+                _hoverFiredForCurrentStay = false;
+                return;
+            }
+
+            if (!string.Equals(_hoveredBinId, matchedBinId, StringComparison.OrdinalIgnoreCase))
+            {
+                _hoveredBinId = matchedBinId;
+                _hoverEnterTick = Environment.TickCount;
+                _hoverFiredForCurrentStay = false;
+                return;
+            }
+
+            if (!_hoverFiredForCurrentStay)
+            {
+                int thresholdMs = isDragHoverCandidate
+                    ? 340
+                    : Math.Max(120, _configService.Current?.HoverOpenDelayMs ?? 280);
+
+                if (Math.Abs(Environment.TickCount - _hoverEnterTick) >= thresholdMs)
+                {
+                    _hoverFiredForCurrentStay = true;
+                    BinGroup bin = FindBin(matchedBinId);
+                    if (bin != null)
+                    {
+                        Win32Interop.DismissTaskbarThumbnailWindows();
+                        var anchorPt = new System.Drawing.Point(
+                            (int)Math.Round(matchedRect.Left + matchedRect.Width / 2.0),
+                            (int)Math.Round(matchedRect.Top + matchedRect.Height / 2.0));
+                        BinTaskbarHoverTriggered?.Invoke(bin, anchorPt, isDragHoverCandidate);
+                    }
+                }
+            }
+        }
+
+        private List<string> GetAllTaskbarActiveBinIds()
+        {
+            var bins = _configService.Current?.Bins;
+            if (bins == null)
+                return new List<string>();
+
+            return bins
+                .Where(b => b != null && (b.IsEnabledOnTaskbar || _knownPinnedBinIds.Contains(b.Id)))
+                .Select(b => b.Id)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private void CaptureTaskbarOrderAsync(bool forceRectScan = false)
+        {
+            if (_capturingOrder)
+                return;
+
+            var activeBinIds = GetAllTaskbarActiveBinIds();
+            if (activeBinIds.Count == 0 || (!forceRectScan && activeBinIds.Count < 2 && _cachedButtonRects.Count > 0))
+                return;
+
             _capturingOrder = true;
 
             Task.Run(() =>
             {
                 try
                 {
-                    var orderedIds = ReadBinOrderFromTaskbarUiAutomation(activeBinIds);
+                    var orderedIds = ReadBinOrderAndRectsFromTaskbarUiAutomation(activeBinIds, out Dictionary<string, System.Windows.Rect> rects);
+                    if (rects != null)
+                    {
+                        lock (_buttonRectsLock)
+                        {
+                            _cachedButtonRects = rects;
+                            _lastButtonRectScanTick = Environment.TickCount;
+                        }
+                    }
+
                     if (orderedIds != null && orderedIds.Count > 1)
                     {
                         _dispatcher.BeginInvoke(new Action(() =>
@@ -489,12 +664,22 @@ namespace WinBins.Services
 
         public void CaptureTaskbarOrderSync()
         {
-            if (_byBinId.Count < 2)
+            var activeBinIds = GetAllTaskbarActiveBinIds();
+            if (activeBinIds.Count == 0)
                 return;
 
             try
             {
-                var orderedIds = ReadBinOrderFromTaskbarUiAutomation(_byBinId.Keys.ToList());
+                var orderedIds = ReadBinOrderAndRectsFromTaskbarUiAutomation(activeBinIds, out Dictionary<string, System.Windows.Rect> rects);
+                if (rects != null)
+                {
+                    lock (_buttonRectsLock)
+                    {
+                        _cachedButtonRects = rects;
+                        _lastButtonRectScanTick = Environment.TickCount;
+                    }
+                }
+
                 if (orderedIds != null && orderedIds.Count > 1)
                 {
                     ApplyCapturedOrder(orderedIds);
@@ -528,9 +713,12 @@ namespace WinBins.Services
             }
         }
 
-        private static List<string> ReadBinOrderFromTaskbarUiAutomation(List<string> activeBinIds)
+        private static List<string> ReadBinOrderAndRectsFromTaskbarUiAutomation(
+            List<string> activeBinIds,
+            out Dictionary<string, System.Windows.Rect> foundRects)
         {
-            if (activeBinIds == null || activeBinIds.Count < 2)
+            foundRects = new Dictionary<string, System.Windows.Rect>(StringComparer.OrdinalIgnoreCase);
+            if (activeBinIds == null || activeBinIds.Count == 0)
                 return null;
 
             IntPtr trayHwnd = Win32Interop.FindWindowExW(IntPtr.Zero, IntPtr.Zero, "Shell_TrayWnd", null);
@@ -567,6 +755,7 @@ namespace WinBins.Services
                             if (!rect.IsEmpty && !double.IsInfinity(rect.Left) && !double.IsNaN(rect.Left))
                             {
                                 matchedSet.Add(binId);
+                                foundRects[binId] = rect;
                                 foundPositions.Add(Tuple.Create(binId, rect.Left));
                             }
                             break;
@@ -770,6 +959,7 @@ namespace WinBins.Services
             _pinSyncDebounceTimer.Stop();
             _pinFollowUpTimer.Stop();
             _taskbandStampTimer.Stop();
+            _hoverMonitorTimer.Stop();
 
             CaptureTaskbarOrderSync();
 

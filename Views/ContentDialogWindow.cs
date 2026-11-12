@@ -43,7 +43,7 @@ namespace WinBins.Views
             SourceInitialized += (_, __) =>
             {
                 IntPtr hwnd = new WindowInteropHelper(this).Handle;
-                Win32Interop.ApplyWindows11WindowStyling(hwnd);
+                Win32Interop.ApplyWindows11WindowStyling(hwnd, forceDarkMode: !FluentTheme.IsLightThemeActive);
             };
 
             bool hasTwoButtons = !string.IsNullOrEmpty(closeButtonText);

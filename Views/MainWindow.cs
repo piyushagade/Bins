@@ -21,11 +21,15 @@ namespace WinBins.Views
 {
     public class MainWindow : Window
     {
+        private const string ManagerItemDragFormat = "WinBins.ManagerItemDrag";
+        private const string ManagerBinDragFormat = "WinBins.ManagerBinDrag";
+
         private readonly ConfigService _configService;
         private readonly IconService _iconService;
         private readonly TaskbarBinHostManager _taskbarManager;
         private readonly BinPopupWindow _popupWindow;
         private readonly RunningAppsTaskbarManager _runningAppsManager;
+        private readonly GlobalHotkeyManager _hotkeyManager;
 
         private enum WorkspacePane
         {
@@ -40,6 +44,7 @@ namespace WinBins.Views
         private bool _flyoutOptionsExpanded;
         private bool _updatingUi;
         private string _editingItemId;
+        private bool _isRecordingHotkey;
 
         // Sidebar controls
         private StackPanel _binsListPanel;
@@ -96,16 +101,32 @@ namespace WinBins.Views
         private CheckBox _showAddToggle;
         private CheckBox _showEditToggle;
         private CheckBox _hideRunningAppsBinToggle;
+        private StackPanel _mosaicBackplateRowWrapper;
+        private CheckBox _mosaicBackplateToggle;
+        private Button _hotkeyRecordBtn;
+        private TextBlock _hotkeyRecordLabel;
+        private Button _clearHotkeyBtn;
 
         // Items list
         private StackPanel _itemsListPanel;
 
         // Global Settings page controls
+        private Border _themeDarkBtn;
+        private TextBlock _themeDarkText;
+        private Border _themeLightBtn;
+        private TextBlock _themeLightText;
+        private Border _themeSystemBtn;
+        private TextBlock _themeSystemText;
+        private CheckBox _acrylicFlyoutToggle;
+        private CheckBox _hoverToOpenToggle;
         private CheckBox _closeOnLaunchToggle;
         private CheckBox _hideRunningAppsGlobalToggle;
         private CheckBox _minimizeToTrayToggle;
         private CheckBox _startupToggle;
         private CheckBox _showPinGuideToggle;
+        private TextBlock _syncFolderStatusText;
+        private Button _resetSyncFolderBtn;
+        private TextBlock _aboutDataFolderPathText;
 
         public bool AllowRealClose { get; set; }
 
@@ -114,13 +135,16 @@ namespace WinBins.Views
             IconService iconService,
             TaskbarBinHostManager taskbarManager,
             BinPopupWindow popupWindow,
-            RunningAppsTaskbarManager runningAppsManager = null)
+            RunningAppsTaskbarManager runningAppsManager = null,
+            GlobalHotkeyManager hotkeyManager = null)
         {
             _configService = configService;
             _iconService = iconService;
             _taskbarManager = taskbarManager;
             _popupWindow = popupWindow;
             _runningAppsManager = runningAppsManager;
+            FluentTheme.ApplyGlobalResources(Resources);
+            _hotkeyManager = hotkeyManager;
 
             Title = "Bins";
             using (var appBmp = Win32Interop.CreateGroupMosaicBitmap(null))
@@ -141,8 +165,28 @@ namespace WinBins.Views
             SourceInitialized += (_, __) =>
             {
                 IntPtr hwnd = new WindowInteropHelper(this).Handle;
-                // Lock caption bar to #202020 (COLORREF 0x00202020) matching SidebarBg/ShellBg with no focus Mica/accent tint
-                Win32Interop.ApplyWindows11WindowStyling(hwnd, useMica: false, captionColorRef: 0x00202020);
+                Win32Interop.ApplyWindows11WindowStyling(
+                    hwnd,
+                    useMica: false,
+                    captionColorRef: FluentTheme.ActiveCaptionColorRef,
+                    forceDarkMode: !FluentTheme.IsLightThemeActive);
+            };
+
+            FluentTheme.ThemeChanged += () =>
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    IntPtr hwnd = new WindowInteropHelper(this).Handle;
+                    if (hwnd != IntPtr.Zero)
+                    {
+                        Win32Interop.ApplyWindows11WindowStyling(
+                            hwnd,
+                            useMica: false,
+                            captionColorRef: FluentTheme.ActiveCaptionColorRef,
+                            forceDarkMode: !FluentTheme.IsLightThemeActive);
+                    }
+                    RefreshFullUi();
+                }));
             };
 
             BuildLayout();
@@ -150,7 +194,7 @@ namespace WinBins.Views
             _selectedBin = _configService.Current?.Bins?.FirstOrDefault();
             RefreshFullUi();
 
-            DragEnter += MainWindow_DragEnter;
+            DragOver += MainWindow_DragOver;
             DragLeave += (_, __) => _dropHighlightOverlay.Visibility = Visibility.Collapsed;
             Drop += MainWindow_Drop;
             Closing += MainWindow_Closing;
@@ -159,6 +203,41 @@ namespace WinBins.Views
 
         private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
         {
+            if (_isRecordingHotkey && _selectedBin != null)
+            {
+                Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+                if (key == Key.Escape)
+                {
+                    _isRecordingHotkey = false;
+                    RebuildRightPane();
+                    e.Handled = true;
+                    return;
+                }
+
+                if ((key == Key.Back || key == Key.Delete) && Keyboard.Modifiers == ModifierKeys.None)
+                {
+                    _isRecordingHotkey = false;
+                    _selectedBin.Hotkey = string.Empty;
+                    _configService.Save(notify: false);
+                    _hotkeyManager?.SyncHotkeys(_configService.Current?.Bins);
+                    RebuildRightPane();
+                    e.Handled = true;
+                    return;
+                }
+
+                string formatted = GlobalHotkeyManager.FormatHotkey(Keyboard.Modifiers, key);
+                if (!string.IsNullOrEmpty(formatted))
+                {
+                    _isRecordingHotkey = false;
+                    _selectedBin.Hotkey = formatted;
+                    _configService.Save(notify: false);
+                    _hotkeyManager?.SyncHotkeys(_configService.Current?.Bins);
+                    RebuildRightPane();
+                }
+                e.Handled = true;
+                return;
+            }
+
             if (e.Key == Key.Escape && _flyoutOptionsExpanded && string.IsNullOrEmpty(_editingItemId))
             {
                 SetFlyoutOptionsOpen(false);
@@ -264,6 +343,16 @@ namespace WinBins.Views
 
                 if (_configService.Current != null)
                 {
+                    BinThemeMode theme = _configService.Current.ThemeMode;
+                    if (_themeDarkBtn != null) ApplySegmentVisual(_themeDarkBtn, _themeDarkText, theme == BinThemeMode.Dark);
+                    if (_themeLightBtn != null) ApplySegmentVisual(_themeLightBtn, _themeLightText, theme == BinThemeMode.Light);
+                    if (_themeSystemBtn != null) ApplySegmentVisual(_themeSystemBtn, _themeSystemText, theme == BinThemeMode.System);
+
+                    if (_acrylicFlyoutToggle != null)
+                        _acrylicFlyoutToggle.IsChecked = _configService.Current.UseAcrylicFlyout;
+                    if (_hoverToOpenToggle != null)
+                        _hoverToOpenToggle.IsChecked = _configService.Current.HoverToOpenFlyout;
+
                     _closeOnLaunchToggle.IsChecked = _configService.Current.ClosePopupOnLaunch;
                     if (_hideRunningAppsGlobalToggle != null)
                     {
@@ -274,6 +363,23 @@ namespace WinBins.Views
                     if (_showPinGuideToggle != null)
                     {
                         _showPinGuideToggle.IsChecked = !_configService.Current.HidePinToTaskbarPrompt;
+                    }
+
+                    if (_syncFolderStatusText != null)
+                    {
+                        _syncFolderStatusText.Text = _configService.IsUsingCustomSyncFolder
+                            ? $"Synced via: {_configService.AppDataFolder}"
+                            : $"Local storage: {_configService.AppDataFolder}";
+                    }
+                    if (_resetSyncFolderBtn != null)
+                    {
+                        _resetSyncFolderBtn.Visibility = _configService.IsUsingCustomSyncFolder
+                            ? Visibility.Visible
+                            : Visibility.Collapsed;
+                    }
+                    if (_aboutDataFolderPathText != null)
+                    {
+                        _aboutDataFolderPathText.Text = _configService.AppDataFolder;
                     }
                 }
             }
@@ -667,7 +773,7 @@ namespace WinBins.Views
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Stretch,
                 Margin = new Thickness(0, 12, 12, 12),
-                Background = FluentTheme.PopupBg,
+                Background = FluentTheme.FlyoutBg,
                 BorderBrush = FluentTheme.SubtleBorder,
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(10),
@@ -762,6 +868,16 @@ namespace WinBins.Views
             segmentedTrack.Child = segRow;
 
             appearanceRows.Children.Add(CreateFlyoutSettingRow("Bin icon", segmentedTrack));
+
+            // Conditional Mosaic Backplate toggle (visible when Grid mosaic is active)
+            _mosaicBackplateRowWrapper = new StackPanel();
+            _mosaicBackplateRowWrapper.Children.Add(CreateSettingsRowDivider());
+            _mosaicBackplateToggle = FluentTheme.CreateToggleCheckBox(null, false);
+            _mosaicBackplateToggle.ToolTip = "Render a subtle frosted rounded squircle backplate behind the 2x2 taskbar mosaic icon";
+            _mosaicBackplateToggle.Checked += MosaicBackplate_Changed;
+            _mosaicBackplateToggle.Unchecked += MosaicBackplate_Changed;
+            _mosaicBackplateRowWrapper.Children.Add(CreateFlyoutSettingRow("Icon backplate", _mosaicBackplateToggle));
+            appearanceRows.Children.Add(_mosaicBackplateRowWrapper);
 
             // Conditional Custom Icon picker sub-row (visible when Custom is active)
             _customIconRowWrapper = new StackPanel { Visibility = Visibility.Collapsed };
@@ -863,6 +979,51 @@ namespace WinBins.Views
             var hideOpenRow = CreateFlyoutSettingRow("Hide open app icons", _hideRunningAppsBinToggle);
             hideOpenRow.ToolTip = "Prevent running apps in this Bin from showing a second standalone icon on the taskbar";
             appearanceRows.Children.Add(hideOpenRow);
+            appearanceRows.Children.Add(CreateSettingsRowDivider());
+
+            // Global Hotkey recorder row
+            var hotkeyRightGroup = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _hotkeyRecordLabel = new TextBlock
+            {
+                Text = "Set shortcut...",
+                FontSize = 12,
+                Foreground = FluentTheme.TextSecondary,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _hotkeyRecordBtn = FluentTheme.CreateButton("", padding: new Thickness(10, 4, 10, 4));
+            _hotkeyRecordBtn.Content = _hotkeyRecordLabel;
+            _hotkeyRecordBtn.ToolTip = "Click and press a key combination (e.g. Alt+1 or Ctrl+Shift+B) to toggle this Bin anywhere";
+            _hotkeyRecordBtn.Click += (_, __) =>
+            {
+                _isRecordingHotkey = !_isRecordingHotkey;
+                RebuildRightPane();
+                if (_isRecordingHotkey)
+                {
+                    Focus();
+                }
+            };
+            hotkeyRightGroup.Children.Add(_hotkeyRecordBtn);
+
+            _clearHotkeyBtn = FluentTheme.CreateIconButton("\uE711", "Clear shortcut key", size: 26, iconSize: 10);
+            _clearHotkeyBtn.Margin = new Thickness(6, 0, 0, 0);
+            _clearHotkeyBtn.Click += (_, __) =>
+            {
+                if (_selectedBin != null)
+                {
+                    _isRecordingHotkey = false;
+                    _selectedBin.Hotkey = string.Empty;
+                    _configService.Save(notify: false);
+                    _hotkeyManager?.SyncHotkeys(_configService.Current?.Bins);
+                    RebuildRightPane();
+                }
+            };
+            hotkeyRightGroup.Children.Add(_clearHotkeyBtn);
+
+            appearanceRows.Children.Add(CreateFlyoutSettingRow("Shortcut key", hotkeyRightGroup));
 
             appearanceCard.Child = appearanceRows;
             sectionsStack.Children.Add(appearanceCard);
@@ -1116,6 +1277,18 @@ namespace WinBins.Views
             }
         }
 
+        private static TextBlock CreateSettingsSectionHeader(string text, bool isFirst = false)
+        {
+            return new TextBlock
+            {
+                Text = text,
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = FluentTheme.TextSecondary,
+                Margin = new Thickness(2, isFirst ? 0 : 14, 0, 8)
+            };
+        }
+
         private ScrollViewer BuildSettingsView()
         {
             var scroll = new ScrollViewer
@@ -1136,8 +1309,54 @@ namespace WinBins.Views
                 FontFamily = FluentTheme.DisplayFont,
                 FontSize = 22,
                 FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 0, 0, 18)
+                Margin = new Thickness(0, 0, 0, 16)
             });
+
+            // --- APPEARANCE ---
+            panel.Children.Add(CreateSettingsSectionHeader("Appearance", isFirst: true));
+
+            var themeTrack = new Border
+            {
+                Background = FluentTheme.SegmentedTrackBg,
+                BorderBrush = FluentTheme.SurfaceStroke,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(2)
+            };
+            var themeRow = new StackPanel { Orientation = Orientation.Horizontal };
+            _themeDarkBtn = CreateSegmentOption(null, "Dark", out _themeDarkText, () => SetAppTheme(BinThemeMode.Dark));
+            _themeLightBtn = CreateSegmentOption(null, "Light", out _themeLightText, () => SetAppTheme(BinThemeMode.Light));
+            _themeSystemBtn = CreateSegmentOption(null, "System", out _themeSystemText, () => SetAppTheme(BinThemeMode.System));
+            themeRow.Children.Add(_themeDarkBtn);
+            themeRow.Children.Add(_themeLightBtn);
+            themeRow.Children.Add(_themeSystemBtn);
+            themeTrack.Child = themeRow;
+            panel.Children.Add(CreateSettingsCard(
+                "\uE790",
+                "App theme",
+                "Choose Dark, Light, or follow your Windows 11 system color mode",
+                themeTrack));
+
+            _acrylicFlyoutToggle = FluentTheme.CreateToggleCheckBox(null, true);
+            _acrylicFlyoutToggle.Checked += GlobalSetting_Changed;
+            _acrylicFlyoutToggle.Unchecked += GlobalSetting_Changed;
+            panel.Children.Add(CreateSettingsCard(
+                "\uE81E",
+                "Translucent Acrylic flyout",
+                "Use Windows 11 Acrylic backdrop blur behind taskbar Bin flyouts",
+                _acrylicFlyoutToggle));
+
+            // --- BEHAVIOR ---
+            panel.Children.Add(CreateSettingsSectionHeader("Behavior"));
+
+            _hoverToOpenToggle = FluentTheme.CreateToggleCheckBox(null, false);
+            _hoverToOpenToggle.Checked += GlobalSetting_Changed;
+            _hoverToOpenToggle.Unchecked += GlobalSetting_Changed;
+            panel.Children.Add(CreateSettingsCard(
+                "\uE8B0",
+                "Hover to open flyout",
+                "Automatically pop open a Bin's flyout when hovering your cursor over its taskbar icon",
+                _hoverToOpenToggle));
 
             _closeOnLaunchToggle = FluentTheme.CreateToggleCheckBox(null, true);
             _closeOnLaunchToggle.Checked += GlobalSetting_Changed;
@@ -1183,6 +1402,80 @@ namespace WinBins.Views
                 "Show taskbar pinning guide",
                 "Show instructions for locking taskbar location and hiding hover previews when adding a Bin",
                 _showPinGuideToggle));
+
+            // --- BACKUP & SYNC ---
+            panel.Children.Add(CreateSettingsSectionHeader("Backup & Sync"));
+
+            var backupButtons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var exportBinsBtn = FluentTheme.CreateButton("Export .bins...", padding: new Thickness(11, 6, 12, 6), iconGlyph: "\uEDE1");
+            exportBinsBtn.Margin = new Thickness(0, 0, 8, 0);
+            exportBinsBtn.Click += ExportBinsBackup_Click;
+            backupButtons.Children.Add(exportBinsBtn);
+
+            var importBinsBtn = FluentTheme.CreateButton("Import .bins...", padding: new Thickness(11, 6, 12, 6), iconGlyph: "\uE896");
+            importBinsBtn.Click += ImportBinsBackup_Click;
+            backupButtons.Children.Add(importBinsBtn);
+
+            panel.Children.Add(CreateSettingsCard(
+                "\uE896",
+                "Backup & restore configuration",
+                "Export all Bins, settings, and custom icons to a portable .bins archive or restore from backup",
+                backupButtons));
+
+            // Cloud Sync Folder card
+            var syncCard = new Border
+            {
+                Background = FluentTheme.CardBg,
+                BorderBrush = FluentTheme.CardBorder,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(16, 14, 16, 14),
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            var syncGrid = new Grid();
+            syncGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            syncGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            syncGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var syncIcon = FluentTheme.CreateFluentIcon("\uE753", 16, FluentTheme.TextSecondary);
+            syncIcon.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 14, 0));
+            Grid.SetColumn(syncIcon, 0);
+            syncGrid.Children.Add(syncIcon);
+
+            var syncTextStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            syncTextStack.Children.Add(new TextBlock
+            {
+                Text = "Cloud sync folder (OneDrive / Dropbox)",
+                FontSize = 13.5,
+                Foreground = FluentTheme.TextPrimary
+            });
+            _syncFolderStatusText = new TextBlock
+            {
+                Text = $"Local storage: {_configService.AppDataFolder}",
+                FontSize = 12,
+                Foreground = FluentTheme.TextMuted,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 2, 16, 0)
+            };
+            syncTextStack.Children.Add(_syncFolderStatusText);
+            Grid.SetColumn(syncTextStack, 1);
+            syncGrid.Children.Add(syncTextStack);
+
+            var syncButtons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var chooseSyncBtn = FluentTheme.CreateButton("Choose folder...", padding: new Thickness(11, 6, 12, 6), iconGlyph: "\uE8B7");
+            chooseSyncBtn.Click += ChooseSyncFolder_Click;
+            syncButtons.Children.Add(chooseSyncBtn);
+
+            _resetSyncFolderBtn = FluentTheme.CreateButton("Reset", padding: new Thickness(10, 6, 11, 6));
+            _resetSyncFolderBtn.Margin = new Thickness(8, 0, 0, 0);
+            _resetSyncFolderBtn.Visibility = Visibility.Collapsed;
+            _resetSyncFolderBtn.Click += ResetSyncFolder_Click;
+            syncButtons.Children.Add(_resetSyncFolderBtn);
+
+            Grid.SetColumn(syncButtons, 2);
+            syncGrid.Children.Add(syncButtons);
+            syncCard.Child = syncGrid;
+            panel.Children.Add(syncCard);
 
             scroll.Content = panel;
             return scroll;
@@ -1581,15 +1874,27 @@ namespace WinBins.Views
             Grid.SetColumn(heroText, 1);
             heroGrid.Children.Add(heroText);
 
+            var heroActions = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var checkUpdateBtn = FluentTheme.CreateButton("Check for updates", padding: new Thickness(11, 6, 12, 6), iconGlyph: "\uE72C");
+            checkUpdateBtn.Margin = new Thickness(0, 0, 8, 0);
+            checkUpdateBtn.Click += CheckForUpdates_Click;
+            heroActions.Children.Add(checkUpdateBtn);
+
             var supportBtn = FluentTheme.CreateButton("Donate", padding: new Thickness(12, 6, 13, 6), iconGlyph: "\uEB51");
-            supportBtn.VerticalAlignment = VerticalAlignment.Center;
             supportBtn.Click += (_, __) =>
             {
                 _activePane = WorkspacePane.Donate;
                 RefreshFullUi();
             };
-            Grid.SetColumn(supportBtn, 2);
-            heroGrid.Children.Add(supportBtn);
+            heroActions.Children.Add(supportBtn);
+
+            Grid.SetColumn(heroActions, 2);
+            heroGrid.Children.Add(heroActions);
 
             heroCard.Child = heroGrid;
             panel.Children.Add(heroCard);
@@ -1604,6 +1909,7 @@ namespace WinBins.Views
             };
             var detailsStack = new StackPanel();
             detailsStack.Children.Add(CreateAboutDetailRow("Author", "Piyush Agade", showTopDivider: false));
+            detailsStack.Children.Add(CreateAboutGitHubRow());
             detailsStack.Children.Add(CreateAboutDetailRow("Architecture", "Windows 11 x64  •  WPF & Win32 Shell / DWM Interop", showTopDivider: true));
             detailsStack.Children.Add(CreateAboutDataFolderRow());
             detailsCard.Child = detailsStack;
@@ -1611,6 +1917,53 @@ namespace WinBins.Views
 
             scroll.Content = panel;
             return scroll;
+        }
+
+        private UIElement CreateAboutGitHubRow()
+        {
+            var wrapper = new StackPanel();
+            wrapper.Children.Add(new Border
+            {
+                Height = 1,
+                Background = FluentTheme.DividerBrush
+            });
+
+            var grid = new Grid { Margin = new Thickness(18, 10, 18, 10) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(140) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var lbl = new TextBlock
+            {
+                Text = "GitHub Repository",
+                FontSize = 13,
+                Foreground = FluentTheme.TextMuted,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(lbl, 0);
+            grid.Children.Add(lbl);
+
+            var urlText = new TextBlock
+            {
+                Text = BackupSyncService.GitHubRepoUrl,
+                FontSize = 12.5,
+                Foreground = FluentTheme.AccentBrush,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Margin = new Thickness(0, 0, 12, 0),
+                Cursor = Cursors.Hand
+            };
+            urlText.MouseLeftButtonUp += (_, __) => OpenExternalUrl(BackupSyncService.GitHubRepoUrl);
+            Grid.SetColumn(urlText, 1);
+            grid.Children.Add(urlText);
+
+            var openRepoBtn = FluentTheme.CreateButton("Open GitHub", padding: new Thickness(10, 5, 11, 5), iconGlyph: "\uE8A7");
+            openRepoBtn.Click += (_, __) => OpenExternalUrl(BackupSyncService.GitHubRepoUrl);
+            Grid.SetColumn(openRepoBtn, 2);
+            grid.Children.Add(openRepoBtn);
+
+            wrapper.Children.Add(grid);
+            return wrapper;
         }
 
         private UIElement CreateAboutDetailRow(string label, string value, bool showTopDivider)
@@ -1678,7 +2031,7 @@ namespace WinBins.Views
             Grid.SetColumn(lbl, 0);
             grid.Children.Add(lbl);
 
-            var pathText = new TextBlock
+            _aboutDataFolderPathText = new TextBlock
             {
                 Text = _configService.AppDataFolder,
                 FontSize = 12.5,
@@ -1687,8 +2040,8 @@ namespace WinBins.Views
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 Margin = new Thickness(0, 0, 12, 0)
             };
-            Grid.SetColumn(pathText, 1);
-            grid.Children.Add(pathText);
+            Grid.SetColumn(_aboutDataFolderPathText, 1);
+            grid.Children.Add(_aboutDataFolderPathText);
 
             var openFolderBtn = FluentTheme.CreateButton("Open folder", padding: new Thickness(10, 5, 11, 5), iconGlyph: "\uE8B7");
             openFolderBtn.Click += (_, __) =>
@@ -1732,18 +2085,23 @@ namespace WinBins.Views
             _binsListPanel.Children.Clear();
             var bins = _configService.Current?.Bins ?? new List<BinGroup>();
 
-            foreach (BinGroup bin in bins)
+            for (int binIdx = 0; binIdx < bins.Count; binIdx++)
             {
+                BinGroup bin = bins[binIdx];
+                int capturedBinIdx = binIdx;
                 bool isSelected = _activePane == WorkspacePane.Bin && _selectedBin != null &&
                                   string.Equals(bin.Id, _selectedBin.Id, StringComparison.OrdinalIgnoreCase);
 
                 var row = new Border
                 {
                     Background = isSelected ? FluentTheme.CardSelectedBg : Brushes.Transparent,
+                    BorderBrush = Brushes.Transparent,
+                    BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(5),
                     Padding = new Thickness(0, 7, 10, 7),
                     Margin = new Thickness(0, 0, 0, 2),
-                    Cursor = Cursors.Hand
+                    Cursor = Cursors.Hand,
+                    AllowDrop = true
                 };
 
                 var grid = new Grid();
@@ -1801,6 +2159,9 @@ namespace WinBins.Views
 
                 row.Child = grid;
 
+                Point? dragStart = null;
+                bool dragged = false;
+
                 row.MouseEnter += (_, __) =>
                 {
                     if (!isSelected)
@@ -1810,9 +2171,35 @@ namespace WinBins.Views
                 {
                     if (!isSelected)
                         row.Background = Brushes.Transparent;
+                    row.BorderBrush = Brushes.Transparent;
+                };
+                row.PreviewMouseLeftButtonDown += (s, e) =>
+                {
+                    dragStart = e.GetPosition(this);
+                    dragged = false;
+                };
+                row.MouseMove += (s, e) =>
+                {
+                    if (e.LeftButton == MouseButtonState.Pressed && dragStart.HasValue)
+                    {
+                        Point cur = e.GetPosition(this);
+                        if (Math.Abs(cur.X - dragStart.Value.X) > 7 || Math.Abs(cur.Y - dragStart.Value.Y) > 7)
+                        {
+                            dragged = true;
+                            dragStart = null;
+                            DragDrop.DoDragDrop(row, new DataObject(ManagerBinDragFormat, capturedBinIdx), DragDropEffects.Move);
+                        }
+                    }
                 };
                 row.MouseLeftButtonUp += (_, __) =>
                 {
+                    dragStart = null;
+                    if (dragged)
+                    {
+                        dragged = false;
+                        return;
+                    }
+                    _isRecordingHotkey = false;
                     _editingItemId = null;
                     _activePane = WorkspacePane.Bin;
                     _selectedBin = bin;
@@ -1820,12 +2207,100 @@ namespace WinBins.Views
                 };
                 row.MouseRightButtonUp += (s, e) =>
                 {
+                    _isRecordingHotkey = false;
                     _editingItemId = null;
                     _activePane = WorkspacePane.Bin;
                     _selectedBin = bin;
                     RefreshFullUi();
                     OpenSidebarBinContextMenu(row, bin);
                     e.Handled = true;
+                };
+
+                // Accept Bin reordering, Item move from right pane, OR external FileDrop directly onto a Bin!
+                row.DragOver += (s, e) =>
+                {
+                    if (e.Data.GetDataPresent(ManagerBinDragFormat))
+                    {
+                        int fromBinIdx = (int)e.Data.GetData(ManagerBinDragFormat);
+                        if (fromBinIdx != capturedBinIdx)
+                        {
+                            e.Effects = DragDropEffects.Move;
+                            row.BorderBrush = FluentTheme.AccentBrush;
+                        }
+                        else
+                        {
+                            e.Effects = DragDropEffects.None;
+                        }
+                        e.Handled = true;
+                    }
+                    else if (e.Data.GetDataPresent(ManagerItemDragFormat) && _selectedBin != null && !ReferenceEquals(_selectedBin, bin))
+                    {
+                        e.Effects = DragDropEffects.Move;
+                        row.BorderBrush = FluentTheme.AccentBrush;
+                        row.Background = FluentTheme.CardSelectedBg;
+                        e.Handled = true;
+                    }
+                    else if (e.Data.GetDataPresent(DataFormats.FileDrop))
+                    {
+                        e.Effects = DragDropEffects.Copy;
+                        row.BorderBrush = FluentTheme.AccentBrush;
+                        e.Handled = true;
+                    }
+                };
+
+                row.DragLeave += (s, e) =>
+                {
+                    row.BorderBrush = Brushes.Transparent;
+                    row.Background = isSelected ? FluentTheme.CardSelectedBg : Brushes.Transparent;
+                };
+
+                row.Drop += (s, e) =>
+                {
+                    row.BorderBrush = Brushes.Transparent;
+                    if (e.Data.GetDataPresent(ManagerBinDragFormat))
+                    {
+                        int fromBinIdx = (int)e.Data.GetData(ManagerBinDragFormat);
+                        if (fromBinIdx >= 0 && fromBinIdx < bins.Count && fromBinIdx != capturedBinIdx)
+                        {
+                            BinGroup moving = bins[fromBinIdx];
+                            bins.RemoveAt(fromBinIdx);
+                            bins.Insert(capturedBinIdx, moving);
+                            _configService.Save(notify: false);
+                            JumpListService.SyncManagerJumpList(_configService, _iconService);
+                            RefreshFullUi();
+                        }
+                        e.Handled = true;
+                    }
+                    else if (e.Data.GetDataPresent(ManagerItemDragFormat) && _selectedBin != null && !ReferenceEquals(_selectedBin, bin))
+                    {
+                        int itemIdx = (int)e.Data.GetData(ManagerItemDragFormat);
+                        MoveItemToAnotherBin(_selectedBin, itemIdx, bin);
+                        e.Handled = true;
+                    }
+                    else if (e.Data.GetDataPresent(DataFormats.FileDrop) &&
+                             e.Data.GetData(DataFormats.FileDrop) is string[] files &&
+                             files.Length > 0)
+                    {
+                        bool any = false;
+                        foreach (string f in files)
+                        {
+                            if (File.Exists(f) || Directory.Exists(f))
+                            {
+                                bin.Items.Add(BinItem.FromPath(f));
+                                any = true;
+                            }
+                        }
+                        if (any)
+                        {
+                            bin.IconRevision++;
+                            _configService.Save(notify: false);
+                            _taskbarManager.RefreshBin(bin);
+                            _runningAppsManager?.SyncRunningWindows();
+                            _popupWindow.RefreshIfShowing(bin);
+                            RefreshFullUi();
+                        }
+                        e.Handled = true;
+                    }
                 };
 
                 _binsListPanel.Children.Add(row);
@@ -2025,6 +2500,14 @@ namespace WinBins.Views
             bool isMosaic = _selectedBin.IconMode == BinIconMode.GridMosaic;
             ApplySegmentVisual(_gridSegmentBtn, _gridSegmentText, isMosaic);
             ApplySegmentVisual(_customSegmentBtn, _customSegmentText, !isMosaic);
+            if (_mosaicBackplateRowWrapper != null)
+            {
+                _mosaicBackplateRowWrapper.Visibility = isMosaic ? Visibility.Visible : Visibility.Collapsed;
+            }
+            if (_mosaicBackplateToggle != null)
+            {
+                _mosaicBackplateToggle.IsChecked = _selectedBin.ShowMosaicBackplate;
+            }
             _customIconRowWrapper.Visibility = !isMosaic ? Visibility.Visible : Visibility.Collapsed;
             if (!isMosaic && !string.IsNullOrWhiteSpace(_selectedBin.CustomIconPath))
             {
@@ -2035,6 +2518,24 @@ namespace WinBins.Views
             {
                 _customIconPreviewImg.Source = null;
                 _customIconPreviewImg.Visibility = Visibility.Collapsed;
+            }
+
+            if (_hotkeyRecordLabel != null && _hotkeyRecordBtn != null && _clearHotkeyBtn != null)
+            {
+                bool hasHotkey = !string.IsNullOrWhiteSpace(_selectedBin.Hotkey);
+                if (_isRecordingHotkey)
+                {
+                    _hotkeyRecordLabel.Text = "Press keys...";
+                    _hotkeyRecordLabel.Foreground = FluentTheme.AccentBrush;
+                    _hotkeyRecordBtn.BorderBrush = FluentTheme.AccentBrush;
+                }
+                else
+                {
+                    _hotkeyRecordLabel.Text = hasHotkey ? _selectedBin.Hotkey : "Set shortcut...";
+                    _hotkeyRecordLabel.Foreground = hasHotkey ? FluentTheme.TextPrimary : FluentTheme.TextSecondary;
+                    _hotkeyRecordBtn.BorderBrush = FluentTheme.SurfaceStroke;
+                }
+                _clearHotkeyBtn.Visibility = hasHotkey && !_isRecordingHotkey ? Visibility.Visible : Visibility.Collapsed;
             }
 
             // Floating Flyout Options sidebar state
@@ -2143,6 +2644,7 @@ namespace WinBins.Views
                     CornerRadius = new CornerRadius(6),
                     Padding = new Thickness(14, isEditing ? 5 : 8, 10, isEditing ? 5 : 8),
                     Margin = new Thickness(0, 0, 0, 4),
+                    AllowDrop = !isEditing,
                     ToolTip = item.TargetPath
                 };
 
@@ -2318,6 +2820,8 @@ namespace WinBins.Views
 
                 row.Child = grid;
 
+                Point? itemDragStart = null;
+
                 row.MouseEnter += (_, __) =>
                 {
                     row.Background = FluentTheme.CardHoverBg;
@@ -2326,6 +2830,7 @@ namespace WinBins.Views
                 row.MouseLeave += (_, __) =>
                 {
                     row.Background = FluentTheme.CardBg;
+                    row.BorderBrush = FluentTheme.CardBorder;
                     actions.Opacity = 0;
                 };
                 row.MouseRightButtonUp += (s, e) =>
@@ -2333,11 +2838,83 @@ namespace WinBins.Views
                     OpenItemContextMenu(row, item, index);
                     e.Handled = true;
                 };
+                row.PreviewMouseLeftButtonDown += (s, e) =>
+                {
+                    // Avoid starting drag if user clicked an action button on the right
+                    if (e.OriginalSource is DependencyObject dep)
+                    {
+                        DependencyObject cur = dep;
+                        while (cur != null && !ReferenceEquals(cur, row))
+                        {
+                            if (cur is Button)
+                            {
+                                itemDragStart = null;
+                                return;
+                            }
+                            cur = VisualTreeHelper.GetParent(cur);
+                        }
+                    }
+                    itemDragStart = e.GetPosition(this);
+                };
+                row.MouseMove += (s, e) =>
+                {
+                    if (e.LeftButton == MouseButtonState.Pressed && itemDragStart.HasValue)
+                    {
+                        Point cur = e.GetPosition(this);
+                        if (Math.Abs(cur.X - itemDragStart.Value.X) > 7 || Math.Abs(cur.Y - itemDragStart.Value.Y) > 7)
+                        {
+                            itemDragStart = null;
+                            DragDrop.DoDragDrop(row, new DataObject(ManagerItemDragFormat, index), DragDropEffects.Move);
+                        }
+                    }
+                };
+                row.MouseLeftButtonUp += (_, __) => itemDragStart = null;
                 row.MouseLeftButtonDown += (s, e) =>
                 {
                     if (e.ClickCount == 2)
                     {
+                        itemDragStart = null;
                         LauncherService.LaunchItem(item);
+                        e.Handled = true;
+                    }
+                };
+
+                row.DragOver += (s, e) =>
+                {
+                    if (e.Data.GetDataPresent(ManagerItemDragFormat))
+                    {
+                        int fromIdx = (int)e.Data.GetData(ManagerItemDragFormat);
+                        if (fromIdx != index)
+                        {
+                            e.Effects = DragDropEffects.Move;
+                            row.BorderBrush = FluentTheme.AccentBrush;
+                            row.Background = FluentTheme.CardSelectedBg;
+                        }
+                        else
+                        {
+                            e.Effects = DragDropEffects.None;
+                        }
+                        e.Handled = true;
+                    }
+                };
+
+                row.DragLeave += (s, e) =>
+                {
+                    row.BorderBrush = FluentTheme.CardBorder;
+                    row.Background = FluentTheme.CardBg;
+                };
+
+                row.Drop += (s, e) =>
+                {
+                    row.BorderBrush = FluentTheme.CardBorder;
+                    row.Background = FluentTheme.CardBg;
+                    if (e.Data.GetDataPresent(ManagerItemDragFormat))
+                    {
+                        int fromIdx = (int)e.Data.GetData(ManagerItemDragFormat);
+                        if (fromIdx != index)
+                        {
+                            MoveSelectedBinItem(fromIdx, index);
+                        }
                         e.Handled = true;
                     }
                 };
@@ -2444,6 +3021,10 @@ namespace WinBins.Views
             menu.Placement = PlacementMode.Bottom;
 
             bool isUrl = item.Kind == BinItemKind.WebUrl || BinItem.IsWebUrl(item.TargetPath);
+            bool isPackaged = item.Kind == BinItemKind.PackagedApp || BinItem.IsPackagedApp(item.TargetPath);
+            string expandedPath = Environment.ExpandEnvironmentVariables((item.TargetPath ?? string.Empty).Trim());
+            bool isFolder = item.Kind == BinItemKind.Folder || (!string.IsNullOrEmpty(expandedPath) && Directory.Exists(expandedPath));
+
             if (isUrl)
             {
                 menu.Items.Add(FluentTheme.CreateMenuItem("Open in browser", () => LauncherService.LaunchItem(item), iconGlyph: "\uE774"));
@@ -2455,17 +3036,77 @@ namespace WinBins.Views
             }
             else
             {
+                if (isFolder && Directory.Exists(expandedPath))
+                {
+                    var peekSub = new MenuItem
+                    {
+                        Header = "Peek folder",
+                        Style = FluentTheme.CreateWin11MenuItemStyle(),
+                        Icon = new TextBlock
+                        {
+                            Text = "\uE8B7",
+                            FontFamily = FluentTheme.IconFont,
+                            FontSize = 13.5,
+                            Foreground = FluentTheme.TextSecondary,
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                            VerticalAlignment = VerticalAlignment.Center
+                        }
+                    };
+                    peekSub.Items.Add(new MenuItem { Header = "Loading..." });
+                    bool populated = false;
+                    peekSub.SubmenuOpened += (_, __) =>
+                    {
+                        if (!populated)
+                        {
+                            populated = true;
+                            BinPopupWindow.PopulateFolderPeekMenu(peekSub, expandedPath, _iconService, null, depth: 0);
+                        }
+                    };
+                    menu.Items.Add(peekSub);
+                }
+
                 menu.Items.Add(FluentTheme.CreateMenuItem("Open", () => LauncherService.LaunchItem(item), iconGlyph: "\uE8A7"));
-                if (item.Kind != BinItemKind.Folder)
+                if (!isFolder && !isPackaged)
                 {
                     menu.Items.Add(FluentTheme.CreateMenuItem("Run as administrator", () => LauncherService.LaunchItem(item, runAsAdmin: true), iconGlyph: "\uE7EF"));
                 }
-                menu.Items.Add(FluentTheme.CreateMenuItem("Open file location", () => LauncherService.OpenItemLocation(item), iconGlyph: "\uE8B7"));
+                if (!isPackaged)
+                {
+                    menu.Items.Add(FluentTheme.CreateMenuItem("Open file location", () => LauncherService.OpenItemLocation(item), iconGlyph: "\uE8B7"));
+                }
             }
 
             menu.Items.Add(FluentTheme.CreateMenuSeparator());
             menu.Items.Add(FluentTheme.CreateMenuItem("Rename", () => BeginInlineItemRename(item), iconGlyph: "\uE70F"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Change icon...", () => ChooseItemIcon(item), iconGlyph: "\uEB9F"));
+
+            var otherBins = _configService.Current?.Bins?.Where(b => _selectedBin != null && !ReferenceEquals(b, _selectedBin)).ToList();
+            if (otherBins != null && otherBins.Count > 0)
+            {
+                var moveToBinMenu = new MenuItem
+                {
+                    Header = "Move to Bin",
+                    Style = FluentTheme.CreateWin11MenuItemStyle(),
+                    Icon = new TextBlock
+                    {
+                        Text = "\uE8DE",
+                        FontFamily = FluentTheme.IconFont,
+                        FontSize = 13.5,
+                        Foreground = FluentTheme.TextSecondary,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                };
+                foreach (BinGroup destBin in otherBins)
+                {
+                    BinGroup capturedDest = destBin;
+                    moveToBinMenu.Items.Add(FluentTheme.CreateMenuItem(capturedDest.Name, () =>
+                    {
+                        MoveItemToAnotherBin(_selectedBin, index, capturedDest);
+                    }));
+                }
+                menu.Items.Add(moveToBinMenu);
+            }
 
             if (!string.IsNullOrWhiteSpace(item.CustomIconPath))
             {
@@ -2638,7 +3279,7 @@ namespace WinBins.Views
             menu.PlacementTarget = btn;
             menu.Placement = PlacementMode.Bottom;
 
-            menu.Items.Add(FluentTheme.CreateMenuItem("Installed App (Start Menu)...", () => AddFromStartMenu_Click(null, null), iconGlyph: "\uE737"));
+            menu.Items.Add(FluentTheme.CreateMenuItem("Installed / Store App...", () => AddFromStartMenu_Click(null, null), iconGlyph: "\uE737"));
             menu.Items.Add(FluentTheme.CreateMenuItem("App or Shortcut...", () => AddAppOrShortcut_Click(null, null), iconGlyph: "\uE7C3"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Folder...", () => AddFolder_Click(null, null), iconGlyph: "\uE8B7"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Website / URL...", () => AddUrl_Click(null, null), iconGlyph: "\uE774"));
@@ -2876,6 +3517,40 @@ namespace WinBins.Views
             RefreshFullUi();
         }
 
+        private void MosaicBackplate_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_updatingUi || _selectedBin == null || _mosaicBackplateToggle == null)
+                return;
+
+            _selectedBin.ShowMosaicBackplate = _mosaicBackplateToggle.IsChecked == true;
+            SaveAndSyncSelectedBin(bumpIcon: true);
+        }
+
+        private void MoveItemToAnotherBin(BinGroup sourceBin, int itemIndex, BinGroup targetBin)
+        {
+            if (sourceBin == null || targetBin == null || ReferenceEquals(sourceBin, targetBin))
+                return;
+            if (sourceBin.Items == null || itemIndex < 0 || itemIndex >= sourceBin.Items.Count)
+                return;
+
+            BinItem moving = sourceBin.Items[itemIndex];
+            sourceBin.Items.RemoveAt(itemIndex);
+            if (targetBin.Items == null)
+                targetBin.Items = new List<BinItem>();
+            targetBin.Items.Add(moving);
+
+            sourceBin.IconRevision++;
+            targetBin.IconRevision++;
+            _configService.Save(notify: false);
+
+            _taskbarManager.RefreshBin(sourceBin);
+            _taskbarManager.RefreshBin(targetBin);
+            _runningAppsManager?.SyncRunningWindows();
+            _popupWindow.RefreshIfShowing(sourceBin);
+            _popupWindow.RefreshIfShowing(targetBin);
+            RefreshFullUi();
+        }
+
         private void MoveSelectedBinItem(int fromIndex, int toIndex)
         {
             if (_selectedBin == null || fromIndex < 0 || toIndex < 0 ||
@@ -2898,7 +3573,9 @@ namespace WinBins.Views
             {
                 foreach (var app in picker.SelectedApps)
                 {
-                    var item = BinItem.FromPath(app.ShortcutPath);
+                    BinItem item = (app.IsPackagedApp || BinItem.IsPackagedApp(app.ShortcutPath))
+                        ? BinItem.FromPackagedApp(app.ShortcutPath, app.Name)
+                        : BinItem.FromPath(app.ShortcutPath);
                     item.Name = app.Name;
                     _selectedBin.Items.Add(item);
                 }
@@ -3025,10 +3702,188 @@ namespace WinBins.Views
             }
         }
 
+        private void SetAppTheme(BinThemeMode mode)
+        {
+            if (_configService.Current == null || _configService.Current.ThemeMode == mode)
+                return;
+
+            _configService.Current.ThemeMode = mode;
+            FluentTheme.ApplyTheme(mode, _configService.Current.UseAcrylicFlyout);
+            _configService.Save(notify: false);
+            RefreshFullUi();
+        }
+
+        private void ExportBinsBackup_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new SaveFileDialog
+            {
+                Title = "Export Bins Backup Archive",
+                Filter = "Bins Backup Archive (*.bins)|*.bins|ZIP Archive (*.zip)|*.zip",
+                DefaultExt = ".bins",
+                FileName = $"Bins-Backup-{DateTime.Now:yyyy-MM-dd}.bins"
+            };
+
+            if (dlg.ShowDialog(this) == true && !string.IsNullOrWhiteSpace(dlg.FileName))
+            {
+                if (BackupSyncService.ExportBackupArchive(_configService, dlg.FileName, out string error))
+                {
+                    ContentDialogWindow.ShowMessage(
+                        this,
+                        "Backup Exported",
+                        $"Saved your Bins configuration and custom icons to:\n{dlg.FileName}");
+                }
+                else
+                {
+                    ContentDialogWindow.ShowMessage(
+                        this,
+                        "Backup Failed",
+                        $"Could not create backup archive:\n{error}");
+                }
+            }
+        }
+
+        private void ImportBinsBackup_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new OpenFileDialog
+            {
+                Title = "Import Bins Backup Archive",
+                Filter = "Bins Backup Archive (*.bins;*.zip)|*.bins;*.zip|All Files (*.*)|*.*"
+            };
+
+            if (dlg.ShowDialog(this) == true && !string.IsNullOrWhiteSpace(dlg.FileName))
+            {
+                bool confirmed = ContentDialogWindow.ShowConfirm(
+                    this,
+                    "Restore Bins Backup?",
+                    "Importing this backup will replace your current Bins configuration with the Bins and settings from the archive.",
+                    primaryText: "Import",
+                    cancelText: "Cancel");
+
+                if (!confirmed)
+                    return;
+
+                if (BackupSyncService.ImportBackupArchive(_configService, dlg.FileName, out string error))
+                {
+                    SyncEverythingAfterConfigReload();
+                    ContentDialogWindow.ShowMessage(
+                        this,
+                        "Backup Restored",
+                        "Your Bins, settings, and icons have been restored.");
+                }
+                else
+                {
+                    ContentDialogWindow.ShowMessage(
+                        this,
+                        "Import Failed",
+                        $"Could not import backup archive:\n{error}");
+                }
+            }
+        }
+
+        private void ChooseSyncFolder_Click(object sender, RoutedEventArgs e)
+        {
+            using (var dlg = new System.Windows.Forms.FolderBrowserDialog())
+            {
+                dlg.Description = "Choose a cloud-synced folder (e.g. OneDrive\\Bins) to store and sync your Bins configuration & custom icons";
+                dlg.ShowNewFolderButton = true;
+                dlg.SelectedPath = _configService.AppDataFolder;
+
+                if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK && !string.IsNullOrWhiteSpace(dlg.SelectedPath))
+                {
+                    if (_configService.SetSyncFolder(dlg.SelectedPath, copyCurrentIfTargetEmpty: true))
+                    {
+                        SyncEverythingAfterConfigReload();
+                    }
+                    else
+                    {
+                        ContentDialogWindow.ShowMessage(
+                            this,
+                            "Sync Folder",
+                            "Could not use the selected folder. Please verify write permissions.");
+                    }
+                }
+            }
+        }
+
+        private void ResetSyncFolder_Click(object sender, RoutedEventArgs e)
+        {
+            _configService.ResetSyncFolderToDefault();
+            SyncEverythingAfterConfigReload();
+        }
+
+        private void SyncEverythingAfterConfigReload()
+        {
+            if (_configService.Current != null)
+            {
+                FluentTheme.ApplyTheme(_configService.Current.ThemeMode, _configService.Current.UseAcrylicFlyout);
+            }
+            _selectedBin = _configService.Current?.Bins?.FirstOrDefault();
+            _taskbarManager.SyncAllBins();
+            _runningAppsManager?.SyncRunningWindows();
+            _hotkeyManager?.SyncHotkeys(_configService.Current?.Bins);
+            RefreshFullUi();
+        }
+
+        private async void CheckForUpdates_Click(object sender, RoutedEventArgs e)
+        {
+            Button btn = sender as Button;
+            if (btn != null)
+                btn.IsEnabled = false;
+
+            try
+            {
+                UpdateCheckResult res = await BackupSyncService.CheckGitHubLatestReleaseAsync();
+                if (!res.Success)
+                {
+                    ContentDialogWindow.ShowMessage(
+                        this,
+                        "Update Check",
+                        $"Could not reach GitHub to check for updates:\n{res.ErrorMessage}");
+                    return;
+                }
+
+                if (res.IsUpdateAvailable)
+                {
+                    bool openRelease = ContentDialogWindow.ShowConfirm(
+                        this,
+                        "Update Available",
+                        $"A newer version of Bins (v{res.LatestVersion}) is available on GitHub!\nYou are currently running v{res.CurrentVersion}.",
+                        primaryText: "View on GitHub",
+                        cancelText: "Later");
+
+                    if (openRelease)
+                    {
+                        OpenExternalUrl(res.ReleaseUrl);
+                    }
+                }
+                else
+                {
+                    ContentDialogWindow.ShowMessage(
+                        this,
+                        "Up to Date",
+                        $"You are running the latest version of Bins (v{AppVersion.Current}).");
+                }
+            }
+            finally
+            {
+                if (btn != null)
+                    btn.IsEnabled = true;
+            }
+        }
+
         private void GlobalSetting_Changed(object sender, RoutedEventArgs e)
         {
             if (_updatingUi || _configService.Current == null)
                 return;
+
+            bool newAcrylic = _acrylicFlyoutToggle?.IsChecked ?? _configService.Current.UseAcrylicFlyout;
+            bool acrylicChanged = newAcrylic != _configService.Current.UseAcrylicFlyout;
+            _configService.Current.UseAcrylicFlyout = newAcrylic;
+
+            if (_hoverToOpenToggle != null)
+            {
+                _configService.Current.HoverToOpenFlyout = _hoverToOpenToggle.IsChecked == true;
+            }
 
             _configService.Current.ClosePopupOnLaunch = _closeOnLaunchToggle.IsChecked == true;
             _configService.Current.MinimizeToTrayOnClose = _minimizeToTrayToggle.IsChecked == true;
@@ -3036,6 +3891,11 @@ namespace WinBins.Views
             if (_showPinGuideToggle != null)
             {
                 _configService.Current.HidePinToTaskbarPrompt = _showPinGuideToggle.IsChecked != true;
+            }
+
+            if (acrylicChanged)
+            {
+                FluentTheme.ApplyTheme(_configService.Current.ThemeMode, _configService.Current.UseAcrylicFlyout);
             }
 
             bool globalHide = _hideRunningAppsGlobalToggle?.IsChecked == true;
@@ -3105,8 +3965,15 @@ namespace WinBins.Views
             return false;
         }
 
-        private void MainWindow_DragEnter(object sender, DragEventArgs e)
+        private void MainWindow_DragOver(object sender, DragEventArgs e)
         {
+            if (e.Data.GetDataPresent(ManagerItemDragFormat) || e.Data.GetDataPresent(ManagerBinDragFormat))
+            {
+                e.Effects = DragDropEffects.Move;
+                e.Handled = true;
+                return;
+            }
+
             if (_activePane == WorkspacePane.Bin &&
                 _selectedBin != null &&
                 (e.Data.GetDataPresent(DataFormats.FileDrop) || TryExtractDroppedWebUrl(e.Data, out _)))
@@ -3124,6 +3991,11 @@ namespace WinBins.Views
         private void MainWindow_Drop(object sender, DragEventArgs e)
         {
             _dropHighlightOverlay.Visibility = Visibility.Collapsed;
+            if (e.Data.GetDataPresent(ManagerItemDragFormat) || e.Data.GetDataPresent(ManagerBinDragFormat))
+            {
+                e.Handled = true;
+                return;
+            }
             if (_activePane == WorkspacePane.Bin && _selectedBin != null)
             {
                 if (e.Data.GetDataPresent(DataFormats.FileDrop) &&
