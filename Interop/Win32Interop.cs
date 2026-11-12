@@ -34,8 +34,13 @@ namespace WinBins.Interop
 
         public const uint FO_MOVE = 0x0001;
         public const uint FO_COPY = 0x0002;
+        public const uint FO_DELETE = 0x0003;
         public const ushort FOF_ALLOWUNDO = 0x0040;
         public const ushort FOF_NOCONFIRMMKDIR = 0x0200;
+
+        public const uint SHERB_NOCONFIRMATION = 0x00000001;
+        public const uint SHERB_NOPROGRESSUI = 0x00000002;
+        public const uint SHERB_NOSOUND = 0x00000004;
 
         public const int WA_INACTIVE = 0;
         public const int WA_ACTIVE = 1;
@@ -176,6 +181,14 @@ namespace WinBins.Interop
             public IntPtr hNameMappings;
             [MarshalAs(UnmanagedType.LPWStr)]
             public string lpszProgressTitle;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct SHQUERYRBINFO
+        {
+            public int cbSize;
+            public long i64Size;
+            public long i64NumItems;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -684,6 +697,96 @@ namespace WinBins.Interop
             }
         }
 
+        public static bool ShellSendFilesToRecycleBin(IEnumerable<string> sourcePaths)
+        {
+            if (sourcePaths == null)
+                return false;
+
+            var validSources = new List<string>();
+            foreach (string raw in sourcePaths)
+            {
+                if (string.IsNullOrWhiteSpace(raw))
+                    continue;
+                string full = raw.Trim().Trim('"');
+                if (File.Exists(full) || Directory.Exists(full))
+                {
+                    validSources.Add(full);
+                }
+            }
+
+            if (validSources.Count == 0)
+                return false;
+
+            string pFrom = string.Join("\0", validSources) + "\0\0";
+            var op = new SHFILEOPSTRUCTW
+            {
+                hwnd = IntPtr.Zero,
+                wFunc = FO_DELETE,
+                pFrom = pFrom,
+                pTo = null,
+                fFlags = FOF_ALLOWUNDO
+            };
+
+            try
+            {
+                int res = SHFileOperationW(ref op);
+                return res == 0 && !op.fAnyOperationsAborted;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        public static extern int SHQueryRecycleBinW(string pszRootPath, ref SHQUERYRBINFO pSHQueryRBInfo);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        public static extern int SHEmptyRecycleBinW(IntPtr hwnd, string pszRootPath, uint dwFlags);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool LockWorkStation();
+
+        [DllImport("powrprof.dll", SetLastError = true)]
+        public static extern bool SetSuspendState(bool hibernate, bool forceCritical, bool disableWakeEvent);
+
+        public static bool TryGetRecycleBinStatus(out long itemCount, out long totalBytes)
+        {
+            itemCount = 0;
+            totalBytes = 0;
+            try
+            {
+                var info = new SHQUERYRBINFO
+                {
+                    cbSize = Marshal.SizeOf(typeof(SHQUERYRBINFO))
+                };
+                if (SHQueryRecycleBinW(null, ref info) == 0)
+                {
+                    itemCount = info.i64NumItems;
+                    totalBytes = info.i64Size;
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+            return false;
+        }
+
+        public static bool EmptyRecycleBin(IntPtr ownerHwnd, bool noConfirm = false)
+        {
+            try
+            {
+                uint flags = noConfirm ? SHERB_NOCONFIRMATION : 0u;
+                int hr = SHEmptyRecycleBinW(ownerHwnd, null, flags);
+                return hr == 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         [DllImport("user32.dll")]
         public static extern uint GetDpiForWindow(IntPtr hwnd);
 
@@ -784,18 +887,24 @@ namespace WinBins.Interop
         /// - 4+ icons (2x2 grid): 58x58 each at (0, 0), (70, 0), (0, 70), and (70, 70) (12px horizontal and vertical padding).
         /// Caller is responsible for calling DestroyIcon on the returned handle when no longer needed.
         /// </summary>
-        public static IntPtr CreateGroupMosaicIconHandle(IList<Bitmap> subIcons, bool showBackplate = false)
+        public static IntPtr CreateGroupMosaicIconHandle(IList<Bitmap> subIcons, bool showBackplate = false, Color? tintColor = null)
         {
-            using (Bitmap mosaic = CreateGroupMosaicBitmap(subIcons, showBackplate))
+            using (Bitmap mosaic = CreateGroupMosaicBitmap(subIcons, showBackplate, tintColor))
             {
                 return CreateAlphaIconHandle(mosaic);
             }
         }
 
+        private static int BlendByte(int a, int b, double weightA)
+        {
+            int val = (int)Math.Round(a * weightA + b * (1.0 - weightA));
+            return Math.Max(0, Math.Min(255, val));
+        }
+
         /// <summary>
-        /// Renders the group mosaic onto a 128x128 32bpp ARGB Bitmap (transparent or with a subtle frosted squircle backplate).
+        /// Renders the group mosaic onto a 128x128 32bpp ARGB Bitmap (transparent or with a frosted/tinted squircle backplate).
         /// </summary>
-        public static Bitmap CreateGroupMosaicBitmap(IList<Bitmap> subIcons, bool showBackplate = false)
+        public static Bitmap CreateGroupMosaicBitmap(IList<Bitmap> subIcons, bool showBackplate = false, Color? tintColor = null)
         {
             const int canvasSize = 128;
             var canvas = new Bitmap(canvasSize, canvasSize, PixelFormat.Format32bppArgb);
@@ -823,13 +932,19 @@ namespace WinBins.Interop
                 if (showBackplate)
                 {
                     var plateRect = new Rectangle(2, 2, 124, 124);
+                    Color topFill = tintColor.HasValue
+                        ? Color.FromArgb(224, BlendByte(tintColor.Value.R, 30, 0.72), BlendByte(tintColor.Value.G, 32, 0.72), BlendByte(tintColor.Value.B, 38, 0.72))
+                        : Color.FromArgb(205, 48, 52, 62);
+                    Color botFill = tintColor.HasValue
+                        ? Color.FromArgb(214, BlendByte(tintColor.Value.R, 16, 0.48), BlendByte(tintColor.Value.G, 18, 0.48), BlendByte(tintColor.Value.B, 24, 0.48))
+                        : Color.FromArgb(195, 30, 32, 40);
+                    Color strokeCol = tintColor.HasValue
+                        ? Color.FromArgb(150, BlendByte(tintColor.Value.R, 255, 0.62), BlendByte(tintColor.Value.G, 255, 0.62), BlendByte(tintColor.Value.B, 255, 0.62))
+                        : Color.FromArgb(85, 255, 255, 255);
+
                     using (GraphicsPath platePath = CreateRoundedRectPath(plateRect, 28))
-                    using (var fillBrush = new LinearGradientBrush(
-                        plateRect,
-                        Color.FromArgb(205, 48, 52, 62),
-                        Color.FromArgb(195, 30, 32, 40),
-                        LinearGradientMode.Vertical))
-                    using (var borderPen = new Pen(Color.FromArgb(85, 255, 255, 255), 2.5f))
+                    using (var fillBrush = new LinearGradientBrush(plateRect, topFill, botFill, LinearGradientMode.Vertical))
+                    using (var borderPen = new Pen(strokeCol, 2.5f))
                     {
                         g.FillPath(fillBrush, platePath);
                         g.DrawPath(borderPen, platePath);
@@ -1805,6 +1920,22 @@ namespace WinBins.Interop
             }
 
             SetForegroundWindow(hwnd);
+        }
+
+        public static void MinimizeWindow(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero || !IsWindow(hwnd))
+                return;
+
+            ShowWindow(hwnd, SW_MINIMIZE);
+        }
+
+        public static void CloseWindowGracefully(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero || !IsWindow(hwnd))
+                return;
+
+            PostMessageW(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
         }
 
         #endregion

@@ -90,6 +90,8 @@
     <Compile Include="Views\IconPickerWindow.cs" />
     <Compile Include="Views\RenameDialogWindow.cs" />
     <Compile Include="Views\AddUrlDialogWindow.cs" />
+    <Compile Include="Views\ItemPropertiesDialogWindow.cs" />
+    <Compile Include="Views\OmniSearchWindow.cs" />
     <Compile Include="Views\TaskbarPinGuideDialog.cs" />
     <Compile Include="Views\MainWindow.cs" />
   </ItemGroup>

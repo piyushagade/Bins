@@ -114,6 +114,10 @@ namespace WinBins
                 {
                     return "NEW_BIN";
                 }
+                else if (string.Equals(a, "--search", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "OPEN_SEARCH";
+                }
                 else if (string.Equals(a, "--settings", StringComparison.OrdinalIgnoreCase))
                 {
                     return "SHOW_SETTINGS";
@@ -164,6 +168,7 @@ namespace WinBins
         private RunningAppsTaskbarManager _runningAppsManager;
         private GlobalHotkeyManager _hotkeyManager;
         private BinPopupWindow _popupWindow;
+        private OmniSearchWindow _omniSearchWindow;
         private MainWindow _mainWindow;
         private System.Windows.Forms.NotifyIcon _trayIcon;
         private Icon _trayDrawingIcon;
@@ -217,10 +222,16 @@ namespace WinBins
                 {
                     _taskbarManager.RefreshBin(bin);
                     _runningAppsManager.SyncRunningWindows();
-                    _hotkeyManager.SyncHotkeys(_configService.Current?.Bins);
+                    _hotkeyManager.SyncHotkeys(_configService.Current?.Bins, _configService.Current?.GlobalSearchHotkey);
                     _mainWindow?.RefreshFullUi();
                     RebuildTrayMenu();
                 });
+
+            _omniSearchWindow = new OmniSearchWindow(
+                _configService,
+                _iconService,
+                _runningAppsManager,
+                onOpenBinEditor: bin => ShowManager(bin));
 
             _mainWindow = new MainWindow(
                 _configService,
@@ -228,7 +239,8 @@ namespace WinBins
                 _taskbarManager,
                 _popupWindow,
                 _runningAppsManager,
-                _hotkeyManager);
+                _hotkeyManager,
+                _omniSearchWindow);
 
             _taskbarManager.BinTaskbarIconClicked += (bin, cursorPt) =>
             {
@@ -246,12 +258,22 @@ namespace WinBins
             {
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
+                    _omniSearchWindow?.HideSearch();
                     if (!_taskbarManager.TryGetBinTaskbarAnchorPoint(bin.Id, out System.Drawing.Point anchorPt))
                     {
                         Win32Interop.GetCursorPos(out Win32Interop.POINT cursorPt);
                         anchorPt = new System.Drawing.Point(cursorPt.X, cursorPt.Y);
                     }
                     _popupWindow.ToggleAtScreenPoint(bin, anchorPt);
+                }));
+            };
+
+            _hotkeyManager.GlobalSearchHotkeyPressed += () =>
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    _popupWindow?.HidePopup();
+                    _omniSearchWindow?.ToggleSearch();
                 }));
             };
 
@@ -270,7 +292,7 @@ namespace WinBins
 
             _taskbarManager.SyncAllBins();
             _runningAppsManager.SyncRunningWindows();
-            _hotkeyManager.SyncHotkeys(_configService.Current?.Bins);
+            _hotkeyManager.SyncHotkeys(_configService.Current?.Bins, _configService.Current?.GlobalSearchHotkey);
             InitializeSystemTray();
             StartIpcServer();
 
@@ -336,6 +358,14 @@ namespace WinBins
                 }
                 menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
             }
+
+            var searchTrayItem = new System.Windows.Forms.ToolStripMenuItem("Search All Bins...");
+            searchTrayItem.Click += (_, __) => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _popupWindow?.HidePopup();
+                _omniSearchWindow?.ShowSearch();
+            }));
+            menu.Items.Add(searchTrayItem);
 
             var managerItem = new System.Windows.Forms.ToolStripMenuItem("Bins Manager...")
             {
@@ -440,11 +470,15 @@ namespace WinBins
                 if (bin?.Items != null)
                 {
                     _popupWindow?.HidePopup();
-                    foreach (BinItem item in bin.Items)
-                    {
-                        LaunchOrActivateItem(item);
-                    }
+                    _ = LauncherService.LaunchBinWorkspaceAsync(bin, _runningAppsManager);
                 }
+                return;
+            }
+
+            if (string.Equals(verb, "OPEN_SEARCH", StringComparison.OrdinalIgnoreCase))
+            {
+                _popupWindow?.HidePopup();
+                _omniSearchWindow?.ShowSearch();
                 return;
             }
 
@@ -530,6 +564,11 @@ namespace WinBins
             _runningAppsManager?.Dispose();
             _taskbarManager?.Dispose();
             _iconService?.Dispose();
+
+            if (_omniSearchWindow != null)
+            {
+                _omniSearchWindow.Close();
+            }
 
             if (_popupWindow != null)
             {

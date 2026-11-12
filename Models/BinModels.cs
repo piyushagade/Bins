@@ -25,6 +25,26 @@ namespace WinBins.Models
         System = 2
     }
 
+    public enum BinWindowStyle
+    {
+        Normal = 0,
+        Maximized = 1,
+        Minimized = 2
+    }
+
+    public enum BinSectionLayout
+    {
+        Tabs = 0,
+        StackedHeaders = 1
+    }
+
+    public enum LiveFolderSortOrder
+    {
+        NewestFirst = 0,
+        NameAscending = 1,
+        TypeThenName = 2
+    }
+
     public enum BinItemKind
     {
         Application = 0,
@@ -32,7 +52,8 @@ namespace WinBins.Models
         Shortcut = 2,
         FileOrUrl = 3,
         WebUrl = 4,
-        PackagedApp = 5
+        PackagedApp = 5,
+        SystemCommand = 6
     }
 
     [DataContract]
@@ -68,6 +89,9 @@ namespace WinBins.Models
         [DataMember(Order = 10)]
         public bool UseAcrylicFlyout { get; set; } = true;
 
+        [DataMember(Order = 11)]
+        public string GlobalSearchHotkey { get; set; } = "Ctrl+Alt+Space";
+
         public AppConfig()
         {
             SetFieldDefaults();
@@ -91,6 +115,7 @@ namespace WinBins.Models
             HoverOpenDelayMs = 280;
             ThemeMode = BinThemeMode.Dark;
             UseAcrylicFlyout = true;
+            GlobalSearchHotkey = "Ctrl+Alt+Space";
         }
 
         public void EnsureDefaults()
@@ -102,6 +127,7 @@ namespace WinBins.Models
 
             if (HoverOpenDelayMs < 100) HoverOpenDelayMs = 100;
             if (HoverOpenDelayMs > 1500) HoverOpenDelayMs = 1500;
+            if (GlobalSearchHotkey == null) GlobalSearchHotkey = string.Empty;
 
             foreach (var bin in Bins)
             {
@@ -176,6 +202,21 @@ namespace WinBins.Models
         [DataMember(Order = 21)]
         public bool ShowMosaicBackplate { get; set; }
 
+        [DataMember(Order = 22)]
+        public BinSectionLayout SectionLayout { get; set; }
+
+        [DataMember(Order = 23)]
+        public string LiveFolderPath { get; set; }
+
+        [DataMember(Order = 24)]
+        public int LiveFolderMaxItems { get; set; }
+
+        [DataMember(Order = 25)]
+        public LiveFolderSortOrder LiveFolderSort { get; set; }
+
+        [DataMember(Order = 26)]
+        public string AccentColorHex { get; set; }
+
         public BinGroup()
         {
             SetFieldDefaults();
@@ -210,6 +251,11 @@ namespace WinBins.Models
             HideRunningAppsOnTaskbar = false;
             Hotkey = string.Empty;
             ShowMosaicBackplate = false;
+            SectionLayout = BinSectionLayout.Tabs;
+            LiveFolderPath = string.Empty;
+            LiveFolderMaxItems = 12;
+            LiveFolderSort = LiveFolderSortOrder.NewestFirst;
+            AccentColorHex = string.Empty;
         }
 
         public void EnsureDefaults()
@@ -231,10 +277,14 @@ namespace WinBins.Models
             if (ItemPadding < 0) ItemPadding = 0;
             if (ItemPadding > 20) ItemPadding = 20;
             if (IconRevision < 1) IconRevision = 1;
+            if (LiveFolderMaxItems < 1) LiveFolderMaxItems = 12;
+            if (LiveFolderMaxItems > 48) LiveFolderMaxItems = 48;
 
             if (CustomIconPath == null) CustomIconPath = string.Empty;
             if (FlyoutIconPath == null) FlyoutIconPath = string.Empty;
             if (Hotkey == null) Hotkey = string.Empty;
+            if (LiveFolderPath == null) LiveFolderPath = string.Empty;
+            if (AccentColorHex == null) AccentColorHex = string.Empty;
 
             if (Items == null)
             {
@@ -252,6 +302,7 @@ namespace WinBins.Models
     public class BinItem
     {
         public const string ShellAppsPrefix = @"shell:AppsFolder\";
+        public const string SystemPrefix = "bin://system/";
 
         [DataMember(Order = 1)]
         public string Id { get; set; } = Guid.NewGuid().ToString("N").Substring(0, 10);
@@ -277,6 +328,24 @@ namespace WinBins.Models
         [DataMember(Order = 8)]
         public int CustomIconIndex { get; set; } = 0;
 
+        [DataMember(Order = 9)]
+        public bool RunAsAdmin { get; set; } = false;
+
+        [DataMember(Order = 10)]
+        public BinWindowStyle WindowStyle { get; set; } = BinWindowStyle.Normal;
+
+        [DataMember(Order = 11)]
+        public string Section { get; set; } = string.Empty;
+
+        [DataMember(Order = 12)]
+        public bool IncludeInOpenAll { get; set; } = true;
+
+        [DataMember(Order = 13)]
+        public int OpenAllDelayMs { get; set; } = 0;
+
+        [IgnoreDataMember]
+        public bool IsLiveFolderItem { get; set; }
+
         public BinItem()
         {
             SetFieldDefaults();
@@ -298,6 +367,12 @@ namespace WinBins.Models
             CustomIconPath = string.Empty;
             CustomIconIndex = 0;
             Kind = BinItemKind.Application;
+            RunAsAdmin = false;
+            WindowStyle = BinWindowStyle.Normal;
+            Section = string.Empty;
+            IncludeInOpenAll = true;
+            OpenAllDelayMs = 0;
+            IsLiveFolderItem = false;
         }
 
         public void EnsureDefaults()
@@ -307,12 +382,18 @@ namespace WinBins.Models
                 Id = Guid.NewGuid().ToString("N").Substring(0, 10);
             }
 
-            if (CustomIconPath == null)
-            {
-                CustomIconPath = string.Empty;
-            }
+            if (Arguments == null) Arguments = string.Empty;
+            if (WorkingDirectory == null) WorkingDirectory = string.Empty;
+            if (CustomIconPath == null) CustomIconPath = string.Empty;
+            if (Section == null) Section = string.Empty;
+            if (OpenAllDelayMs < 0) OpenAllDelayMs = 0;
+            if (OpenAllDelayMs > 15000) OpenAllDelayMs = 15000;
 
-            if (!string.IsNullOrWhiteSpace(TargetPath) && IsWebUrl(TargetPath))
+            if (!string.IsNullOrWhiteSpace(TargetPath) && IsSystemCommand(TargetPath))
+            {
+                Kind = BinItemKind.SystemCommand;
+            }
+            else if (!string.IsNullOrWhiteSpace(TargetPath) && IsWebUrl(TargetPath))
             {
                 Kind = BinItemKind.WebUrl;
             }
@@ -373,6 +454,57 @@ namespace WinBins.Models
                 TargetPath = fullTarget,
                 Kind = BinItemKind.PackagedApp
             };
+        }
+
+        public static BinItem FromSystemAction(string actionKey, string displayName = null, string customCommand = null)
+        {
+            string cleanKey = (actionKey ?? string.Empty).Trim().ToLowerInvariant();
+            if (cleanKey.StartsWith(SystemPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                cleanKey = cleanKey.Substring(SystemPrefix.Length);
+            }
+
+            string fullTarget = SystemPrefix + cleanKey;
+            return new BinItem
+            {
+                Id = Guid.NewGuid().ToString("N").Substring(0, 10),
+                Name = !string.IsNullOrWhiteSpace(displayName) ? displayName.Trim() : DeriveSystemActionTitle(cleanKey),
+                TargetPath = fullTarget,
+                Arguments = customCommand ?? string.Empty,
+                Kind = BinItemKind.SystemCommand,
+                IncludeInOpenAll = false
+            };
+        }
+
+        public static bool IsSystemCommand(string value)
+        {
+            return !string.IsNullOrWhiteSpace(value) &&
+                   value.Trim().StartsWith(SystemPrefix, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static string GetSystemActionKey(string value)
+        {
+            if (!IsSystemCommand(value))
+                return string.Empty;
+
+            return value.Trim().Substring(SystemPrefix.Length).Trim('/').ToLowerInvariant();
+        }
+
+        public static string DeriveSystemActionTitle(string actionKey)
+        {
+            switch ((actionKey ?? string.Empty).ToLowerInvariant())
+            {
+                case "recyclebin": return "Recycle Bin";
+                case "lock": return "Lock PC";
+                case "sleep": return "Sleep";
+                case "restart": return "Restart PC";
+                case "shutdown": return "Shut Down";
+                case "snip": return "Screen Snip";
+                case "taskmgr": return "Task Manager";
+                case "settings": return "Windows Settings";
+                case "powershell": return "PowerShell Command";
+                default: return "System Action";
+            }
         }
 
         public static bool IsPackagedApp(string value)
@@ -446,6 +578,9 @@ namespace WinBins.Models
             if (string.IsNullOrWhiteSpace(path))
                 return BinItemKind.FileOrUrl;
 
+            if (IsSystemCommand(path))
+                return BinItemKind.SystemCommand;
+
             if (IsPackagedApp(path))
                 return BinItemKind.PackagedApp;
 
@@ -475,6 +610,9 @@ namespace WinBins.Models
         {
             if (string.IsNullOrWhiteSpace(path))
                 return "Item";
+
+            if (IsSystemCommand(path))
+                return DeriveSystemActionTitle(GetSystemActionKey(path));
 
             if (IsWebUrl(path))
                 return DeriveUrlDisplayName(path);

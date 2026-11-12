@@ -5,7 +5,9 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using System.Windows;
+using WinBins.Interop;
 using WinBins.Models;
 using WinBins.Views;
 
@@ -21,15 +23,31 @@ namespace WinBins.Services
 
     public static class LauncherService
     {
+        public static ProcessWindowStyle MapWindowStyle(BinWindowStyle style)
+        {
+            switch (style)
+            {
+                case BinWindowStyle.Maximized: return ProcessWindowStyle.Maximized;
+                case BinWindowStyle.Minimized: return ProcessWindowStyle.Minimized;
+                default: return ProcessWindowStyle.Normal;
+            }
+        }
+
         public static bool LaunchItem(BinItem item, bool runAsAdmin = false)
         {
             if (item == null || string.IsNullOrWhiteSpace(item.TargetPath))
                 return false;
 
             string target = Environment.ExpandEnvironmentVariables(item.TargetPath.Trim());
+            bool elevate = runAsAdmin || item.RunAsAdmin;
 
             try
             {
+                if (item.Kind == BinItemKind.SystemCommand || BinItem.IsSystemCommand(target))
+                {
+                    return ExecuteSystemAction(item, elevate);
+                }
+
                 if (BinItem.IsWebUrl(target))
                 {
                     Process.Start(new ProcessStartInfo
@@ -57,7 +75,8 @@ namespace WinBins.Services
                     {
                         FileName = "explorer.exe",
                         Arguments = $"\"{target}\"",
-                        UseShellExecute = true
+                        UseShellExecute = true,
+                        WindowStyle = MapWindowStyle(item.WindowStyle)
                     });
                     return true;
                 }
@@ -65,17 +84,22 @@ namespace WinBins.Services
                 var psi = new ProcessStartInfo
                 {
                     FileName = target,
-                    UseShellExecute = true
+                    UseShellExecute = true,
+                    WindowStyle = MapWindowStyle(item.WindowStyle)
                 };
 
                 if (!string.IsNullOrWhiteSpace(item.Arguments))
                 {
-                    psi.Arguments = item.Arguments;
+                    psi.Arguments = Environment.ExpandEnvironmentVariables(item.Arguments);
                 }
 
-                if (!string.IsNullOrWhiteSpace(item.WorkingDirectory) && Directory.Exists(item.WorkingDirectory))
+                if (!string.IsNullOrWhiteSpace(item.WorkingDirectory))
                 {
-                    psi.WorkingDirectory = item.WorkingDirectory;
+                    string expandedWorkDir = Environment.ExpandEnvironmentVariables(item.WorkingDirectory.Trim());
+                    if (Directory.Exists(expandedWorkDir))
+                    {
+                        psi.WorkingDirectory = expandedWorkDir;
+                    }
                 }
                 else if (File.Exists(target))
                 {
@@ -86,7 +110,7 @@ namespace WinBins.Services
                     }
                 }
 
-                if (runAsAdmin)
+                if (elevate)
                 {
                     psi.Verb = "runas";
                 }
@@ -107,6 +131,241 @@ namespace WinBins.Services
                     $"Could not open \"{item.Name}\":\n{ex.Message}\n\nTarget: {target}");
                 return false;
             }
+        }
+
+        private static bool ExecuteSystemAction(BinItem item, bool elevate)
+        {
+            string action = BinItem.GetSystemActionKey(item.TargetPath);
+            switch (action)
+            {
+                case "recyclebin":
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = "shell:RecycleBinFolder",
+                        UseShellExecute = true
+                    });
+                    return true;
+
+                case "lock":
+                    return Win32Interop.LockWorkStation();
+
+                case "sleep":
+                    return Win32Interop.SetSuspendState(false, false, false);
+
+                case "restart":
+                    if (!ContentDialogWindow.ShowConfirm(
+                        Application.Current?.MainWindow,
+                        "Restart PC",
+                        "Are you sure you want to restart your computer now?",
+                        primaryText: "Restart",
+                        isDestructive: true))
+                    {
+                        return false;
+                    }
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "shutdown.exe",
+                        Arguments = "/r /t 0",
+                        UseShellExecute = true,
+                        CreateNoWindow = true
+                    });
+                    return true;
+
+                case "shutdown":
+                    if (!ContentDialogWindow.ShowConfirm(
+                        Application.Current?.MainWindow,
+                        "Shut Down PC",
+                        "Are you sure you want to shut down your computer now?",
+                        primaryText: "Shut Down",
+                        isDestructive: true))
+                    {
+                        return false;
+                    }
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "shutdown.exe",
+                        Arguments = "/s /t 0",
+                        UseShellExecute = true,
+                        CreateNoWindow = true
+                    });
+                    return true;
+
+                case "snip":
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "ms-screenclip:",
+                        UseShellExecute = true
+                    });
+                    return true;
+
+                case "taskmgr":
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "taskmgr.exe",
+                        UseShellExecute = true
+                    });
+                    return true;
+
+                case "settings":
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "ms-settings:",
+                        UseShellExecute = true
+                    });
+                    return true;
+
+                case "powershell":
+                {
+                    string cmd = (item.Arguments ?? string.Empty).Trim();
+                    string escaped = cmd.Replace("\"", "\\\"");
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = "powershell.exe",
+                        Arguments = string.IsNullOrWhiteSpace(cmd)
+                            ? "-NoLogo"
+                            : $"-NoProfile -ExecutionPolicy Bypass -Command \"{escaped}\"",
+                        UseShellExecute = true,
+                        WindowStyle = MapWindowStyle(item.WindowStyle)
+                    };
+                    if (!string.IsNullOrWhiteSpace(item.WorkingDirectory))
+                    {
+                        string wd = Environment.ExpandEnvironmentVariables(item.WorkingDirectory.Trim());
+                        if (Directory.Exists(wd))
+                            psi.WorkingDirectory = wd;
+                    }
+                    if (elevate)
+                    {
+                        psi.Verb = "runas";
+                    }
+                    Process.Start(psi);
+                    return true;
+                }
+
+                default:
+                    return false;
+            }
+        }
+
+        public static List<BinItem> GetLiveFolderItems(BinGroup bin, int? maxOverride = null)
+        {
+            var list = new List<BinItem>();
+            if (bin == null || string.IsNullOrWhiteSpace(bin.LiveFolderPath))
+                return list;
+
+            string expanded = Environment.ExpandEnvironmentVariables(bin.LiveFolderPath.Trim().Trim('"'));
+            if (!Directory.Exists(expanded))
+                return list;
+
+            int cap = Math.Max(1, Math.Min(48, maxOverride ?? bin.LiveFolderMaxItems));
+
+            try
+            {
+                var dirInfo = new DirectoryInfo(expanded);
+                var entries = dirInfo.EnumerateFileSystemInfos()
+                    .Where(fsi =>
+                    {
+                        if ((fsi.Attributes & (FileAttributes.Hidden | FileAttributes.System)) != 0)
+                            return false;
+                        string n = fsi.Name;
+                        if (string.Equals(n, "desktop.ini", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(n, "thumbs.db", StringComparison.OrdinalIgnoreCase))
+                            return false;
+                        return true;
+                    });
+
+                switch (bin.LiveFolderSort)
+                {
+                    case LiveFolderSortOrder.NameAscending:
+                        entries = entries.OrderBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase);
+                        break;
+                    case LiveFolderSortOrder.TypeThenName:
+                        entries = entries
+                            .OrderByDescending(e => (e.Attributes & FileAttributes.Directory) != 0)
+                            .ThenBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase);
+                        break;
+                    default: // NewestFirst
+                        entries = entries.OrderByDescending(e => e.LastWriteTimeUtc);
+                        break;
+                }
+
+                foreach (FileSystemInfo fsi in entries.Take(cap))
+                {
+                    BinItem liveItem = BinItem.FromPath(fsi.FullName);
+                    liveItem.Id = "live_" + fsi.FullName.GetHashCode().ToString("x8");
+                    liveItem.IsLiveFolderItem = true;
+                    liveItem.IncludeInOpenAll = false;
+                    liveItem.Section = "Live Folder";
+                    list.Add(liveItem);
+                }
+            }
+            catch
+            {
+            }
+
+            return list;
+        }
+
+        public static async Task LaunchBinWorkspaceAsync(BinGroup bin, RunningAppsTaskbarManager runningAppsMgr)
+        {
+            if (bin == null)
+                return;
+
+            var targets = (bin.Items ?? new List<BinItem>())
+                .Where(it => it != null && it.IncludeInOpenAll && !BinItem.IsSystemCommand(it.TargetPath))
+                .ToList();
+
+            if (targets.Count == 0 && !string.IsNullOrWhiteSpace(bin.LiveFolderPath))
+            {
+                string folder = Environment.ExpandEnvironmentVariables(bin.LiveFolderPath.Trim());
+                if (Directory.Exists(folder))
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = "explorer.exe",
+                            Arguments = $"\"{folder}\"",
+                            UseShellExecute = true
+                        });
+                    }
+                    catch { }
+                }
+                return;
+            }
+
+            foreach (BinItem item in targets)
+            {
+                var liveWindows = runningAppsMgr?.GetRunningWindowsForItem(item);
+                if (liveWindows != null && liveWindows.Count > 0)
+                {
+                    Win32Interop.ActivateAndRestoreWindow(liveWindows[0].Hwnd);
+                }
+                else
+                {
+                    LaunchItem(item);
+                }
+
+                if (item.OpenAllDelayMs > 0)
+                {
+                    int clampedDelay = Math.Min(15000, item.OpenAllDelayMs);
+                    await Task.Delay(clampedDelay).ConfigureAwait(true);
+                }
+            }
+        }
+
+        public static string FormatByteSize(long bytes)
+        {
+            if (bytes <= 0) return "0 B";
+            string[] units = { "B", "KB", "MB", "GB", "TB" };
+            double val = bytes;
+            int idx = 0;
+            while (val >= 1024 && idx < units.Length - 1)
+            {
+                val /= 1024.0;
+                idx++;
+            }
+            return idx == 0 ? $"{bytes} B" : $"{val:0.#} {units[idx]}";
         }
 
         public static bool LaunchItemWithFiles(BinItem item, IEnumerable<string> droppedFiles)

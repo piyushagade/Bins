@@ -30,6 +30,7 @@ namespace WinBins.Views
         private readonly BinPopupWindow _popupWindow;
         private readonly RunningAppsTaskbarManager _runningAppsManager;
         private readonly GlobalHotkeyManager _hotkeyManager;
+        private readonly OmniSearchWindow _omniSearchWindow;
 
         private enum WorkspacePane
         {
@@ -45,6 +46,7 @@ namespace WinBins.Views
         private bool _updatingUi;
         private string _editingItemId;
         private bool _isRecordingHotkey;
+        private bool _isRecordingGlobalSearchHotkey;
 
         // Sidebar controls
         private StackPanel _binsListPanel;
@@ -103,9 +105,25 @@ namespace WinBins.Views
         private CheckBox _hideRunningAppsBinToggle;
         private StackPanel _mosaicBackplateRowWrapper;
         private CheckBox _mosaicBackplateToggle;
+        private readonly List<Tuple<string, Border, TextBlock>> _accentSwatchItems = new List<Tuple<string, Border, TextBlock>>();
         private Button _hotkeyRecordBtn;
         private TextBlock _hotkeyRecordLabel;
         private Button _clearHotkeyBtn;
+        private Border _sectionTabsBtn;
+        private TextBlock _sectionTabsText;
+        private Border _sectionHeadersBtn;
+        private TextBlock _sectionHeadersText;
+        private Button _liveFolderBtn;
+        private TextBlock _liveFolderBtnLabel;
+        private Button _clearLiveFolderBtn;
+        private StackPanel _liveFolderDetailsWrapper;
+        private Border _liveSortNewestBtn;
+        private TextBlock _liveSortNewestText;
+        private Border _liveSortNameBtn;
+        private TextBlock _liveSortNameText;
+        private Border _liveSortTypeBtn;
+        private TextBlock _liveSortTypeText;
+        private TextBlock _liveMaxItemsValueText;
 
         // Items list
         private StackPanel _itemsListPanel;
@@ -119,6 +137,9 @@ namespace WinBins.Views
         private TextBlock _themeSystemText;
         private CheckBox _acrylicFlyoutToggle;
         private CheckBox _hoverToOpenToggle;
+        private Button _globalSearchHotkeyBtn;
+        private TextBlock _globalSearchHotkeyLabel;
+        private Button _clearGlobalSearchHotkeyBtn;
         private CheckBox _closeOnLaunchToggle;
         private CheckBox _hideRunningAppsGlobalToggle;
         private CheckBox _minimizeToTrayToggle;
@@ -136,7 +157,8 @@ namespace WinBins.Views
             TaskbarBinHostManager taskbarManager,
             BinPopupWindow popupWindow,
             RunningAppsTaskbarManager runningAppsManager = null,
-            GlobalHotkeyManager hotkeyManager = null)
+            GlobalHotkeyManager hotkeyManager = null,
+            OmniSearchWindow omniSearchWindow = null)
         {
             _configService = configService;
             _iconService = iconService;
@@ -145,6 +167,7 @@ namespace WinBins.Views
             _runningAppsManager = runningAppsManager;
             FluentTheme.ApplyGlobalResources(Resources);
             _hotkeyManager = hotkeyManager;
+            _omniSearchWindow = omniSearchWindow;
 
             Title = "Bins";
             using (var appBmp = Win32Interop.CreateGroupMosaicBitmap(null))
@@ -201,8 +224,48 @@ namespace WinBins.Views
             PreviewKeyDown += MainWindow_PreviewKeyDown;
         }
 
+        private void SyncAllHotkeys()
+        {
+            _hotkeyManager?.SyncHotkeys(_configService.Current?.Bins, _configService.Current?.GlobalSearchHotkey);
+        }
+
         private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
         {
+            if (_isRecordingGlobalSearchHotkey && _configService.Current != null)
+            {
+                Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+                if (key == Key.Escape)
+                {
+                    _isRecordingGlobalSearchHotkey = false;
+                    RefreshFullUi();
+                    e.Handled = true;
+                    return;
+                }
+
+                if ((key == Key.Back || key == Key.Delete) && Keyboard.Modifiers == ModifierKeys.None)
+                {
+                    _isRecordingGlobalSearchHotkey = false;
+                    _configService.Current.GlobalSearchHotkey = string.Empty;
+                    _configService.Save(notify: false);
+                    SyncAllHotkeys();
+                    RefreshFullUi();
+                    e.Handled = true;
+                    return;
+                }
+
+                string formatted = GlobalHotkeyManager.FormatHotkey(Keyboard.Modifiers, key);
+                if (!string.IsNullOrEmpty(formatted))
+                {
+                    _isRecordingGlobalSearchHotkey = false;
+                    _configService.Current.GlobalSearchHotkey = formatted;
+                    _configService.Save(notify: false);
+                    SyncAllHotkeys();
+                    RefreshFullUi();
+                }
+                e.Handled = true;
+                return;
+            }
+
             if (_isRecordingHotkey && _selectedBin != null)
             {
                 Key key = e.Key == Key.System ? e.SystemKey : e.Key;
@@ -219,7 +282,7 @@ namespace WinBins.Views
                     _isRecordingHotkey = false;
                     _selectedBin.Hotkey = string.Empty;
                     _configService.Save(notify: false);
-                    _hotkeyManager?.SyncHotkeys(_configService.Current?.Bins);
+                    SyncAllHotkeys();
                     RebuildRightPane();
                     e.Handled = true;
                     return;
@@ -231,9 +294,18 @@ namespace WinBins.Views
                     _isRecordingHotkey = false;
                     _selectedBin.Hotkey = formatted;
                     _configService.Save(notify: false);
-                    _hotkeyManager?.SyncHotkeys(_configService.Current?.Bins);
+                    SyncAllHotkeys();
                     RebuildRightPane();
                 }
+                e.Handled = true;
+                return;
+            }
+
+            if (Keyboard.Modifiers == ModifierKeys.Control &&
+                (e.Key == Key.K || e.Key == Key.F) &&
+                !(Keyboard.FocusedElement is TextBox))
+            {
+                _omniSearchWindow?.ShowSearch();
                 e.Handled = true;
                 return;
             }
@@ -353,6 +425,24 @@ namespace WinBins.Views
                     if (_hoverToOpenToggle != null)
                         _hoverToOpenToggle.IsChecked = _configService.Current.HoverToOpenFlyout;
 
+                    if (_globalSearchHotkeyLabel != null && _globalSearchHotkeyBtn != null && _clearGlobalSearchHotkeyBtn != null)
+                    {
+                        bool hasGlobalHk = !string.IsNullOrWhiteSpace(_configService.Current.GlobalSearchHotkey);
+                        if (_isRecordingGlobalSearchHotkey)
+                        {
+                            _globalSearchHotkeyLabel.Text = "Press keys...";
+                            _globalSearchHotkeyLabel.Foreground = FluentTheme.AccentBrush;
+                            _globalSearchHotkeyBtn.BorderBrush = FluentTheme.AccentBrush;
+                        }
+                        else
+                        {
+                            _globalSearchHotkeyLabel.Text = hasGlobalHk ? _configService.Current.GlobalSearchHotkey : "Set shortcut...";
+                            _globalSearchHotkeyLabel.Foreground = hasGlobalHk ? FluentTheme.TextPrimary : FluentTheme.TextSecondary;
+                            _globalSearchHotkeyBtn.BorderBrush = FluentTheme.SurfaceStroke;
+                        }
+                        _clearGlobalSearchHotkeyBtn.Visibility = hasGlobalHk && !_isRecordingGlobalSearchHotkey ? Visibility.Visible : Visibility.Collapsed;
+                    }
+
                     _closeOnLaunchToggle.IsChecked = _configService.Current.ClosePopupOnLaunch;
                     if (_hideRunningAppsGlobalToggle != null)
                     {
@@ -402,11 +492,29 @@ namespace WinBins.Views
             navGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
             var navHeader = new DockPanel { Margin = new Thickness(10, 2, 2, 8) };
+            var navHeaderActions = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var searchAllBtn = FluentTheme.CreateIconButton("\uE721", "Search all Bins (Ctrl+K)", size: 28, iconSize: 12);
+            searchAllBtn.Margin = new Thickness(0, 0, 2, 0);
+            searchAllBtn.Click += (_, __) => _omniSearchWindow?.ShowSearch();
+            navHeaderActions.Children.Add(searchAllBtn);
+
             var newBinIconBtn = FluentTheme.CreateButton("New", isSubtle: true, padding: new Thickness(8, 4, 9, 4), iconGlyph: "\uE710");
-            newBinIconBtn.ToolTip = "Create a new Bin";
+            newBinIconBtn.ToolTip = "Create a new Bin (Right-click for Smart Folder Bin presets)";
             newBinIconBtn.Click += CreateNewBin_Click;
-            DockPanel.SetDock(newBinIconBtn, Dock.Right);
-            navHeader.Children.Add(newBinIconBtn);
+            newBinIconBtn.MouseRightButtonUp += (s, e) =>
+            {
+                OpenNewBinPresetMenu(newBinIconBtn);
+                e.Handled = true;
+            };
+            navHeaderActions.Children.Add(newBinIconBtn);
+
+            DockPanel.SetDock(navHeaderActions, Dock.Right);
+            navHeader.Children.Add(navHeaderActions);
 
             navHeader.Children.Add(new TextBlock
             {
@@ -879,6 +987,53 @@ namespace WinBins.Views
             _mosaicBackplateRowWrapper.Children.Add(CreateFlyoutSettingRow("Icon backplate", _mosaicBackplateToggle));
             appearanceRows.Children.Add(_mosaicBackplateRowWrapper);
 
+            appearanceRows.Children.Add(CreateSettingsRowDivider());
+
+            // Per-Bin Accent Color Tint Swatches (tints taskbar backplate, active tabs, running indicators & title)
+            _accentSwatchItems.Clear();
+            var swatchesRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            foreach (var preset in FluentTheme.PresetBinAccents)
+            {
+                string presetName = preset.Item1;
+                string presetHex = preset.Item2;
+                bool isDefaultSwatch = string.IsNullOrEmpty(presetHex);
+
+                var checkGlyph = new TextBlock
+                {
+                    Text = "\uE73E",
+                    FontFamily = FluentTheme.IconFont,
+                    FontSize = 9,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = isDefaultSwatch ? FluentTheme.AccentInkBrush : Brushes.White,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Visibility = Visibility.Collapsed
+                };
+
+                var swatchDot = new Border
+                {
+                    Width = 18,
+                    Height = 18,
+                    CornerRadius = new CornerRadius(9),
+                    Background = isDefaultSwatch ? FluentTheme.AccentBrush : FluentTheme.BrushFromHex(presetHex),
+                    BorderBrush = FluentTheme.SurfaceStroke,
+                    BorderThickness = new Thickness(1.5),
+                    Margin = new Thickness(_accentSwatchItems.Count == 0 ? 0 : 4, 0, 0, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = isDefaultSwatch ? "Default system accent" : $"{presetName} ({presetHex})",
+                    Child = checkGlyph
+                };
+                string capturedHex = presetHex;
+                swatchDot.MouseLeftButtonUp += (_, __) => SetBinAccentColor(capturedHex);
+                _accentSwatchItems.Add(Tuple.Create(presetHex, swatchDot, checkGlyph));
+                swatchesRow.Children.Add(swatchDot);
+            }
+            appearanceRows.Children.Add(CreateFlyoutSettingRow("Accent tint", swatchesRow));
+
             // Conditional Custom Icon picker sub-row (visible when Custom is active)
             _customIconRowWrapper = new StackPanel { Visibility = Visibility.Collapsed };
             _customIconRowWrapper.Children.Add(CreateSettingsRowDivider());
@@ -1017,7 +1172,7 @@ namespace WinBins.Views
                     _isRecordingHotkey = false;
                     _selectedBin.Hotkey = string.Empty;
                     _configService.Save(notify: false);
-                    _hotkeyManager?.SyncHotkeys(_configService.Current?.Bins);
+                    SyncAllHotkeys();
                     RebuildRightPane();
                 }
             };
@@ -1067,11 +1222,115 @@ namespace WinBins.Views
             layoutRows.Children.Add(CreateFlyoutSettingRow(
                 "Padding",
                 CreateBareStepper("padding", out _paddingValueText, () => AdjustItemPadding(-2), () => AdjustItemPadding(+2), valueWidth: 42)));
+            layoutRows.Children.Add(CreateSettingsRowDivider());
+
+            var sectionLayoutTrack = new Border
+            {
+                Background = FluentTheme.SegmentedTrackBg,
+                BorderBrush = FluentTheme.SurfaceStroke,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(2),
+                ToolTip = "Display item categories as pill tabs or stacked headers in the flyout"
+            };
+            var sectionLayoutRow = new StackPanel { Orientation = Orientation.Horizontal };
+            _sectionTabsBtn = CreateSegmentOption(null, "Tabs", out _sectionTabsText, () => SetSectionLayout(BinSectionLayout.Tabs));
+            _sectionHeadersBtn = CreateSegmentOption(null, "Headers", out _sectionHeadersText, () => SetSectionLayout(BinSectionLayout.StackedHeaders));
+            sectionLayoutRow.Children.Add(_sectionTabsBtn);
+            sectionLayoutRow.Children.Add(_sectionHeadersBtn);
+            sectionLayoutTrack.Child = sectionLayoutRow;
+            layoutRows.Children.Add(CreateFlyoutSettingRow("Categories", sectionLayoutTrack));
 
             layoutCard.Child = layoutRows;
             sectionsStack.Children.Add(layoutCard);
 
-            // ==================== SECTION 3: HEADER ELEMENTS ====================
+            // ==================== SECTION 3: SMART FOLDER (LIVE) ====================
+            sectionsStack.Children.Add(CreateDrawerSectionLabel("Smart folder (Live)"));
+
+            var liveFolderCard = CreateDrawerGroupCard();
+            var liveFolderRows = new StackPanel();
+
+            var liveFolderRightGroup = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var liveFolderBtnInner = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            liveFolderBtnInner.Children.Add(new TextBlock
+            {
+                Text = "\uE8B7",
+                FontFamily = FluentTheme.IconFont,
+                FontSize = 12,
+                Foreground = FluentTheme.TextSecondary,
+                Margin = new Thickness(0, 0, 6, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            _liveFolderBtnLabel = new TextBlock
+            {
+                Text = "Set folder...",
+                FontSize = 12,
+                MaxWidth = 132,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Foreground = FluentTheme.TextSecondary,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            liveFolderBtnInner.Children.Add(_liveFolderBtnLabel);
+
+            _liveFolderBtn = FluentTheme.CreateButton("", padding: new Thickness(10, 4, 10, 4));
+            _liveFolderBtn.Content = liveFolderBtnInner;
+            _liveFolderBtn.ToolTip = "Dynamically mirror files and subfolders from a live folder (e.g. Downloads or Desktop) inside this Bin";
+            _liveFolderBtn.Click += LiveFolderButton_Click;
+            liveFolderRightGroup.Children.Add(_liveFolderBtn);
+
+            _clearLiveFolderBtn = FluentTheme.CreateIconButton("\uE711", "Clear live folder", size: 26, iconSize: 10);
+            _clearLiveFolderBtn.Margin = new Thickness(6, 0, 0, 0);
+            _clearLiveFolderBtn.Click += (_, __) =>
+            {
+                if (_selectedBin != null)
+                {
+                    _selectedBin.LiveFolderPath = string.Empty;
+                    SaveAndSyncSelectedBin(bumpIcon: true);
+                }
+            };
+            liveFolderRightGroup.Children.Add(_clearLiveFolderBtn);
+
+            liveFolderRows.Children.Add(CreateFlyoutSettingRow("Live folder", liveFolderRightGroup));
+
+            _liveFolderDetailsWrapper = new StackPanel { Visibility = Visibility.Collapsed };
+            _liveFolderDetailsWrapper.Children.Add(CreateSettingsRowDivider());
+
+            var liveSortTrack = new Border
+            {
+                Background = FluentTheme.SegmentedTrackBg,
+                BorderBrush = FluentTheme.SurfaceStroke,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(2)
+            };
+            var liveSortRow = new StackPanel { Orientation = Orientation.Horizontal };
+            _liveSortNewestBtn = CreateSegmentOption(null, "Newest", out _liveSortNewestText, () => SetLiveFolderSort(LiveFolderSortOrder.NewestFirst));
+            _liveSortNameBtn = CreateSegmentOption(null, "Name", out _liveSortNameText, () => SetLiveFolderSort(LiveFolderSortOrder.NameAscending));
+            _liveSortTypeBtn = CreateSegmentOption(null, "Type", out _liveSortTypeText, () => SetLiveFolderSort(LiveFolderSortOrder.TypeThenName));
+            liveSortRow.Children.Add(_liveSortNewestBtn);
+            liveSortRow.Children.Add(_liveSortNameBtn);
+            liveSortRow.Children.Add(_liveSortTypeBtn);
+            liveSortTrack.Child = liveSortRow;
+            _liveFolderDetailsWrapper.Children.Add(CreateFlyoutSettingRow("Sort by", liveSortTrack));
+
+            _liveFolderDetailsWrapper.Children.Add(CreateSettingsRowDivider());
+            _liveFolderDetailsWrapper.Children.Add(CreateFlyoutSettingRow(
+                "Max items",
+                CreateBareStepper("live items", out _liveMaxItemsValueText, () => AdjustLiveMaxItems(-4), () => AdjustLiveMaxItems(+4), valueWidth: 38)));
+
+            liveFolderRows.Children.Add(_liveFolderDetailsWrapper);
+            liveFolderCard.Child = liveFolderRows;
+            sectionsStack.Children.Add(liveFolderCard);
+
+            // ==================== SECTION 4: HEADER ELEMENTS ====================
             sectionsStack.Children.Add(CreateDrawerSectionLabel("Flyout header"));
 
             var controlsCard = CreateDrawerGroupCard(isLast: true);
@@ -1348,6 +1607,54 @@ namespace WinBins.Views
 
             // --- BEHAVIOR ---
             panel.Children.Add(CreateSettingsSectionHeader("Behavior"));
+
+            var searchControls = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var openOmniBtn = FluentTheme.CreateButton("Search now", padding: new Thickness(10, 5, 11, 5), iconGlyph: "\uE721");
+            openOmniBtn.Margin = new Thickness(0, 0, 8, 0);
+            openOmniBtn.Click += (_, __) => _omniSearchWindow?.ShowSearch();
+            searchControls.Children.Add(openOmniBtn);
+
+            _globalSearchHotkeyLabel = new TextBlock
+            {
+                Text = "Ctrl+Alt+Space",
+                FontSize = 12,
+                Foreground = FluentTheme.TextPrimary,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _globalSearchHotkeyBtn = FluentTheme.CreateButton("", padding: new Thickness(10, 5, 10, 5));
+            _globalSearchHotkeyBtn.Content = _globalSearchHotkeyLabel;
+            _globalSearchHotkeyBtn.ToolTip = "Click and press a global shortcut to toggle Cross-Bin Search from anywhere";
+            _globalSearchHotkeyBtn.Click += (_, __) =>
+            {
+                _isRecordingGlobalSearchHotkey = !_isRecordingGlobalSearchHotkey;
+                RefreshFullUi();
+                if (_isRecordingGlobalSearchHotkey)
+                {
+                    Focus();
+                }
+            };
+            searchControls.Children.Add(_globalSearchHotkeyBtn);
+
+            _clearGlobalSearchHotkeyBtn = FluentTheme.CreateIconButton("\uE711", "Clear global search shortcut", size: 28, iconSize: 10);
+            _clearGlobalSearchHotkeyBtn.Margin = new Thickness(6, 0, 0, 0);
+            _clearGlobalSearchHotkeyBtn.Click += (_, __) =>
+            {
+                if (_configService.Current != null)
+                {
+                    _isRecordingGlobalSearchHotkey = false;
+                    _configService.Current.GlobalSearchHotkey = string.Empty;
+                    _configService.Save(notify: false);
+                    SyncAllHotkeys();
+                    RefreshFullUi();
+                }
+            };
+            searchControls.Children.Add(_clearGlobalSearchHotkeyBtn);
+
+            panel.Children.Add(CreateSettingsCard(
+                "\uE721",
+                "Global cross-bin search",
+                "Search and launch items across all Bins and Smart Live Folders with a system-wide shortcut",
+                searchControls));
 
             _hoverToOpenToggle = FluentTheme.CreateToggleCheckBox(null, false);
             _hoverToOpenToggle.Checked += GlobalSetting_Changed;
@@ -2115,7 +2422,7 @@ namespace WinBins.Views
                     Width = 3,
                     Height = 16,
                     CornerRadius = new CornerRadius(1.5),
-                    Background = FluentTheme.AccentBrush,
+                    Background = FluentTheme.GetEffectiveAccentBrush(bin.AccentColorHex),
                     HorizontalAlignment = HorizontalAlignment.Left,
                     VerticalAlignment = VerticalAlignment.Center,
                     Visibility = isSelected ? Visibility.Visible : Visibility.Hidden
@@ -2200,6 +2507,7 @@ namespace WinBins.Views
                         return;
                     }
                     _isRecordingHotkey = false;
+                    _isRecordingGlobalSearchHotkey = false;
                     _editingItemId = null;
                     _activePane = WorkspacePane.Bin;
                     _selectedBin = bin;
@@ -2208,6 +2516,7 @@ namespace WinBins.Views
                 row.MouseRightButtonUp += (s, e) =>
                 {
                     _isRecordingHotkey = false;
+                    _isRecordingGlobalSearchHotkey = false;
                     _editingItemId = null;
                     _activePane = WorkspacePane.Bin;
                     _selectedBin = bin;
@@ -2319,6 +2628,17 @@ namespace WinBins.Views
             var menu = FluentTheme.CreateDarkContextMenu();
             menu.PlacementTarget = anchor;
             menu.Placement = PlacementMode.MousePoint;
+
+            int wsCount = (bin.Items ?? new List<BinItem>())
+                .Count(it => it != null && it.IncludeInOpenAll && !BinItem.IsSystemCommand(it.TargetPath));
+            if (wsCount > 0)
+            {
+                menu.Items.Add(FluentTheme.CreateMenuItem($"Open workspace ({wsCount} items)", () =>
+                {
+                    _ = LauncherService.LaunchBinWorkspaceAsync(bin, _runningAppsManager);
+                }, iconGlyph: "\uE8A7"));
+                menu.Items.Add(FluentTheme.CreateMenuSeparator());
+            }
 
             menu.Items.Add(FluentTheme.CreateMenuItem("Preview flyout", () =>
             {
@@ -2472,6 +2792,13 @@ namespace WinBins.Views
 
             int count = _selectedBin.Items?.Count ?? 0;
             string itemWord = count == 1 ? "1 item" : $"{count} items";
+            if (!string.IsNullOrWhiteSpace(_selectedBin.LiveFolderPath))
+            {
+                string liveLeaf = GetFolderLeafLabel(_selectedBin.LiveFolderPath);
+                itemWord = count == 0
+                    ? $"Live folder: {liveLeaf}"
+                    : $"{itemWord}  •  Live: {liveLeaf}";
+            }
             bool isPinned = ShortcutService.IsBinPinnedOnTaskbar(_selectedBin);
             if (isPinned)
             {
@@ -2507,6 +2834,13 @@ namespace WinBins.Views
             if (_mosaicBackplateToggle != null)
             {
                 _mosaicBackplateToggle.IsChecked = _selectedBin.ShowMosaicBackplate;
+            }
+            string activeAccentHex = (_selectedBin.AccentColorHex ?? string.Empty).Trim();
+            foreach (var sw in _accentSwatchItems)
+            {
+                bool match = string.Equals(sw.Item1 ?? string.Empty, activeAccentHex, StringComparison.OrdinalIgnoreCase);
+                sw.Item3.Visibility = match ? Visibility.Visible : Visibility.Collapsed;
+                sw.Item2.BorderBrush = match ? FluentTheme.TextPrimary : FluentTheme.SurfaceStroke;
             }
             _customIconRowWrapper.Visibility = !isMosaic ? Visibility.Visible : Visibility.Collapsed;
             if (!isMosaic && !string.IsNullOrWhiteSpace(_selectedBin.CustomIconPath))
@@ -2548,6 +2882,41 @@ namespace WinBins.Views
             ApplySegmentVisual(_densityCompactBtn, _densityCompactText, _selectedBin.Density == BinFlyoutDensity.Compact);
             ApplySegmentVisual(_densityNormalBtn, _densityNormalText, _selectedBin.Density == BinFlyoutDensity.Normal);
             ApplySegmentVisual(_densitySpaciousBtn, _densitySpaciousText, _selectedBin.Density == BinFlyoutDensity.Spacious);
+
+            if (_sectionTabsBtn != null && _sectionHeadersBtn != null)
+            {
+                ApplySegmentVisual(_sectionTabsBtn, _sectionTabsText, _selectedBin.SectionLayout == BinSectionLayout.Tabs);
+                ApplySegmentVisual(_sectionHeadersBtn, _sectionHeadersText, _selectedBin.SectionLayout == BinSectionLayout.StackedHeaders);
+            }
+
+            bool hasLiveFolder = !string.IsNullOrWhiteSpace(_selectedBin.LiveFolderPath);
+            if (_liveFolderBtnLabel != null && _clearLiveFolderBtn != null && _liveFolderDetailsWrapper != null)
+            {
+                if (hasLiveFolder)
+                {
+                    _liveFolderBtnLabel.Text = GetFolderLeafLabel(_selectedBin.LiveFolderPath);
+                    _liveFolderBtnLabel.Foreground = FluentTheme.TextPrimary;
+                    _liveFolderBtn.ToolTip = _selectedBin.LiveFolderPath;
+                    _clearLiveFolderBtn.Visibility = Visibility.Visible;
+                    _liveFolderDetailsWrapper.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    _liveFolderBtnLabel.Text = "Set folder...";
+                    _liveFolderBtnLabel.Foreground = FluentTheme.TextSecondary;
+                    _liveFolderBtn.ToolTip = "Dynamically mirror files and subfolders from a live folder (e.g. Downloads or Desktop) inside this Bin";
+                    _clearLiveFolderBtn.Visibility = Visibility.Collapsed;
+                    _liveFolderDetailsWrapper.Visibility = Visibility.Collapsed;
+                }
+
+                ApplySegmentVisual(_liveSortNewestBtn, _liveSortNewestText, _selectedBin.LiveFolderSort == LiveFolderSortOrder.NewestFirst);
+                ApplySegmentVisual(_liveSortNameBtn, _liveSortNameText, _selectedBin.LiveFolderSort == LiveFolderSortOrder.NameAscending);
+                ApplySegmentVisual(_liveSortTypeBtn, _liveSortTypeText, _selectedBin.LiveFolderSort == LiveFolderSortOrder.TypeThenName);
+                if (_liveMaxItemsValueText != null)
+                {
+                    _liveMaxItemsValueText.Text = Math.Max(1, Math.Min(48, _selectedBin.LiveFolderMaxItems)).ToString();
+                }
+            }
 
             bool hasFlyoutIcon = !string.IsNullOrWhiteSpace(_selectedBin.FlyoutIconPath);
             if (hasFlyoutIcon)
@@ -2596,8 +2965,19 @@ namespace WinBins.Views
                 return;
 
             var items = _selectedBin.Items ?? new List<BinItem>();
+            bool hasLiveFolder = !string.IsNullOrWhiteSpace(_selectedBin.LiveFolderPath);
+            if (hasLiveFolder)
+            {
+                _itemsListPanel.Children.Add(BuildLiveFolderBannerCard(_selectedBin));
+            }
+
             if (items.Count == 0)
             {
+                if (hasLiveFolder)
+                {
+                    return;
+                }
+
                 var emptyBorder = new Border
                 {
                     Background = FluentTheme.CardBg,
@@ -2767,16 +3147,68 @@ namespace WinBins.Views
                     continue;
                 }
 
+                var infoRow = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
                 var nameBlock = new TextBlock
                 {
                     Text = item.Name,
                     FontSize = 13.5,
+                    MaxWidth = 240,
                     Foreground = FluentTheme.TextPrimary,
                     VerticalAlignment = VerticalAlignment.Center,
                     TextTrimming = TextTrimming.CharacterEllipsis
                 };
-                Grid.SetColumn(nameBlock, 1);
-                grid.Children.Add(nameBlock);
+                infoRow.Children.Add(nameBlock);
+
+                int openWinCount = _runningAppsManager?.GetRunningWindowsForItem(item)?.Count ?? 0;
+                if (openWinCount > 0)
+                {
+                    infoRow.Children.Add(new Border
+                    {
+                        Width = 7,
+                        Height = 7,
+                        CornerRadius = new CornerRadius(3.5),
+                        Background = FluentTheme.SuccessBrush,
+                        Margin = new Thickness(8, 0, 0, 0),
+                        VerticalAlignment = VerticalAlignment.Center,
+                        ToolTip = openWinCount == 1 ? "Running (1 open window)" : $"Running ({openWinCount} open windows)"
+                    });
+                }
+
+                if (item.RunAsAdmin)
+                {
+                    var shieldIcon = FluentTheme.CreateFluentIcon("\uEA18", 11.5, FluentTheme.BrushFromHex("#F59E0B"));
+                    shieldIcon.SetValue(FrameworkElement.MarginProperty, new Thickness(7, 0, 0, 0));
+                    shieldIcon.SetValue(FrameworkElement.ToolTipProperty, "Always run as administrator");
+                    infoRow.Children.Add(shieldIcon);
+                }
+
+                if (!string.IsNullOrWhiteSpace(item.Section))
+                {
+                    infoRow.Children.Add(new Border
+                    {
+                        Background = FluentTheme.GetTintedPillBgBrush(_selectedBin.AccentColorHex, 36),
+                        BorderBrush = FluentTheme.SurfaceStroke,
+                        BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(4),
+                        Padding = new Thickness(6, 1, 6, 1.5),
+                        Margin = new Thickness(8, 0, 0, 0),
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Child = new TextBlock
+                        {
+                            Text = item.Section.Trim(),
+                            FontSize = 10.5,
+                            Foreground = FluentTheme.TextSecondary
+                        }
+                    });
+                }
+
+                Grid.SetColumn(infoRow, 1);
+                grid.Children.Add(infoRow);
 
                 var actions = new StackPanel
                 {
@@ -2792,6 +3224,10 @@ namespace WinBins.Views
                 var changeIconBtn = FluentTheme.CreateIconButton("\uEB9F", "Change icon", size: 28, iconSize: 11.5);
                 changeIconBtn.Click += (_, __) => ChooseItemIcon(item);
                 actions.Children.Add(changeIconBtn);
+
+                var propsBtn = FluentTheme.CreateIconButton("\uE713", "Item properties", size: 28, iconSize: 11.5);
+                propsBtn.Click += (_, __) => OpenItemProperties(item);
+                actions.Children.Add(propsBtn);
 
                 var upBtn = FluentTheme.CreateIconButton("\uE74A", "Move up", size: 28, iconSize: 11.5);
                 upBtn.IsEnabled = index > 0;
@@ -3020,12 +3456,26 @@ namespace WinBins.Views
             menu.PlacementTarget = anchor;
             menu.Placement = PlacementMode.Bottom;
 
-            bool isUrl = item.Kind == BinItemKind.WebUrl || BinItem.IsWebUrl(item.TargetPath);
-            bool isPackaged = item.Kind == BinItemKind.PackagedApp || BinItem.IsPackagedApp(item.TargetPath);
+            bool isSystem = item.Kind == BinItemKind.SystemCommand || BinItem.IsSystemCommand(item.TargetPath);
+            bool isUrl = !isSystem && (item.Kind == BinItemKind.WebUrl || BinItem.IsWebUrl(item.TargetPath));
+            bool isPackaged = !isSystem && (item.Kind == BinItemKind.PackagedApp || BinItem.IsPackagedApp(item.TargetPath));
             string expandedPath = Environment.ExpandEnvironmentVariables((item.TargetPath ?? string.Empty).Trim());
-            bool isFolder = item.Kind == BinItemKind.Folder || (!string.IsNullOrEmpty(expandedPath) && Directory.Exists(expandedPath));
+            bool isFolder = !isSystem && (item.Kind == BinItemKind.Folder || (!string.IsNullOrEmpty(expandedPath) && Directory.Exists(expandedPath)));
 
-            if (isUrl)
+            if (isSystem)
+            {
+                string sysKey = BinItem.GetSystemActionKey(item.TargetPath);
+                menu.Items.Add(FluentTheme.CreateMenuItem("Execute", () => LauncherService.LaunchItem(item), iconGlyph: "\uE768"));
+                if (string.Equals(sysKey, "recyclebin", StringComparison.OrdinalIgnoreCase))
+                {
+                    menu.Items.Add(FluentTheme.CreateMenuItem("Empty Recycle Bin", () =>
+                    {
+                        Win32Interop.EmptyRecycleBin(new WindowInteropHelper(this).Handle, noConfirm: false);
+                        SaveAndSyncSelectedBin(bumpIcon: true);
+                    }, iconGlyph: "\uE74D"));
+                }
+            }
+            else if (isUrl)
             {
                 menu.Items.Add(FluentTheme.CreateMenuItem("Open in browser", () => LauncherService.LaunchItem(item), iconGlyph: "\uE774"));
                 menu.Items.Add(FluentTheme.CreateMenuItem("Edit URL...", () => EditUrlItem(item), iconGlyph: "\uE71B"));
@@ -3079,6 +3529,49 @@ namespace WinBins.Views
             menu.Items.Add(FluentTheme.CreateMenuSeparator());
             menu.Items.Add(FluentTheme.CreateMenuItem("Rename", () => BeginInlineItemRename(item), iconGlyph: "\uE70F"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Change icon...", () => ChooseItemIcon(item), iconGlyph: "\uEB9F"));
+            menu.Items.Add(FluentTheme.CreateMenuItem("Properties...", () => OpenItemProperties(item), iconGlyph: "\uE713"));
+
+            if (_selectedBin != null)
+            {
+                var catMenu = new MenuItem
+                {
+                    Header = "Category / Tab",
+                    Style = FluentTheme.CreateWin11MenuItemStyle(),
+                    Icon = FluentTheme.CreateFluentIcon("\uE8EC", 13.5, FluentTheme.TextSecondary)
+                };
+                bool isGeneral = string.IsNullOrWhiteSpace(item.Section);
+                catMenu.Items.Add(FluentTheme.CreateMenuItem(
+                    isGeneral ? "✓ General (Default)" : "General (Default)",
+                    () =>
+                    {
+                        item.Section = string.Empty;
+                        SaveAndSyncSelectedBin(bumpIcon: false);
+                    }));
+
+                var existingCats = (_selectedBin.Items ?? new List<BinItem>())
+                    .Where(it => it != null && !string.IsNullOrWhiteSpace(it.Section))
+                    .Select(it => it.Section.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(s => s, StringComparer.CurrentCultureIgnoreCase)
+                    .ToList();
+
+                foreach (string cat in existingCats)
+                {
+                    string capturedCat = cat;
+                    bool isCurCat = string.Equals((item.Section ?? string.Empty).Trim(), capturedCat, StringComparison.OrdinalIgnoreCase);
+                    catMenu.Items.Add(FluentTheme.CreateMenuItem(
+                        isCurCat ? $"✓ {capturedCat}" : capturedCat,
+                        () =>
+                        {
+                            item.Section = capturedCat;
+                            SaveAndSyncSelectedBin(bumpIcon: false);
+                        }));
+                }
+
+                catMenu.Items.Add(FluentTheme.CreateMenuSeparator());
+                catMenu.Items.Add(FluentTheme.CreateMenuItem("New / edit category...", () => OpenItemProperties(item), iconGlyph: "\uE710"));
+                menu.Items.Add(catMenu);
+            }
 
             var otherBins = _configService.Current?.Bins?.Where(b => _selectedBin != null && !ReferenceEquals(b, _selectedBin)).ToList();
             if (otherBins != null && otherBins.Count > 0)
@@ -3217,6 +3710,18 @@ namespace WinBins.Views
             menu.PlacementTarget = btn;
             menu.Placement = PlacementMode.Bottom;
 
+            int wsCount = (_selectedBin.Items ?? new List<BinItem>())
+                .Count(it => it != null && it.IncludeInOpenAll && !BinItem.IsSystemCommand(it.TargetPath));
+            if (wsCount > 0)
+            {
+                BinGroup targetBin = _selectedBin;
+                menu.Items.Add(FluentTheme.CreateMenuItem($"Open workspace ({wsCount} items)", () =>
+                {
+                    _ = LauncherService.LaunchBinWorkspaceAsync(targetBin, _runningAppsManager);
+                }, iconGlyph: "\uE8A7"));
+                menu.Items.Add(FluentTheme.CreateMenuSeparator());
+            }
+
             bool selectedPinned = ShortcutService.IsBinPinnedOnTaskbar(_selectedBin);
             if (selectedPinned)
             {
@@ -3283,8 +3788,338 @@ namespace WinBins.Views
             menu.Items.Add(FluentTheme.CreateMenuItem("App or Shortcut...", () => AddAppOrShortcut_Click(null, null), iconGlyph: "\uE7C3"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Folder...", () => AddFolder_Click(null, null), iconGlyph: "\uE8B7"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Website / URL...", () => AddUrl_Click(null, null), iconGlyph: "\uE774"));
+            menu.Items.Add(FluentTheme.CreateMenuSeparator());
+            menu.Items.Add(BuildSystemActionsSubmenu());
+            menu.Items.Add(FluentTheme.CreateMenuItem("Smart Live Folder...", () =>
+            {
+                SetFlyoutOptionsOpen(true);
+            }, iconGlyph: "\uE8F4"));
 
             menu.IsOpen = true;
+        }
+
+        private MenuItem BuildSystemActionsSubmenu()
+        {
+            var sysMenu = new MenuItem
+            {
+                Header = "System action",
+                Style = FluentTheme.CreateWin11MenuItemStyle(),
+                Icon = FluentTheme.CreateFluentIcon("\uE770", 13.5, FluentTheme.TextSecondary)
+            };
+
+            void AddSys(string label, string key, string glyph)
+            {
+                sysMenu.Items.Add(FluentTheme.CreateMenuItem(label, () =>
+                {
+                    if (_selectedBin == null)
+                        return;
+                    _selectedBin.Items.Add(BinItem.FromSystemAction(key, label));
+                    SaveAndSyncSelectedBin(bumpIcon: true);
+                }, iconGlyph: glyph));
+            }
+
+            AddSys("Recycle Bin (Live)", "recyclebin", "\uE74D");
+            AddSys("Screen Snip", "snip", "\uE7A6");
+            AddSys("Task Manager", "taskmgr", "\uE9D9");
+            AddSys("Windows Settings", "settings", "\uE713");
+            sysMenu.Items.Add(FluentTheme.CreateMenuSeparator());
+            AddSys("Lock PC", "lock", "\uE72E");
+            AddSys("Sleep", "sleep", "\uE708");
+            AddSys("Restart PC", "restart", "\uE777");
+            AddSys("Shut Down", "shutdown", "\uE7E8");
+            sysMenu.Items.Add(FluentTheme.CreateMenuSeparator());
+            sysMenu.Items.Add(FluentTheme.CreateMenuItem("PowerShell Command...", () =>
+            {
+                if (_selectedBin == null)
+                    return;
+                BinItem draft = BinItem.FromSystemAction("powershell", "PowerShell Command", "");
+                var existingSections = _selectedBin.Items?.Select(i => i?.Section).Where(s => !string.IsNullOrWhiteSpace(s));
+                var dlg = new ItemPropertiesDialogWindow(draft, existingSections) { Owner = this };
+                if (dlg.ShowDialog() == true)
+                {
+                    _selectedBin.Items.Add(draft);
+                    SaveAndSyncSelectedBin(bumpIcon: true);
+                }
+            }, iconGlyph: "\uE756"));
+
+            return sysMenu;
+        }
+
+        private void OpenItemProperties(BinItem item)
+        {
+            if (item == null || _selectedBin == null)
+                return;
+
+            var existingSections = (_selectedBin.Items ?? new List<BinItem>())
+                .Where(it => it != null && !string.IsNullOrWhiteSpace(it.Section))
+                .Select(it => it.Section.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var dlg = new ItemPropertiesDialogWindow(item, existingSections)
+            {
+                Owner = this
+            };
+            if (dlg.ShowDialog() == true)
+            {
+                SaveAndSyncSelectedBin(bumpIcon: true);
+            }
+        }
+
+        private Border BuildLiveFolderBannerCard(BinGroup bin)
+        {
+            string expandedFolder = Environment.ExpandEnvironmentVariables((bin.LiveFolderPath ?? string.Empty).Trim());
+            string leaf = GetFolderLeafLabel(expandedFolder);
+            string sortLabel = bin.LiveFolderSort == LiveFolderSortOrder.NewestFirst
+                ? "Newest first"
+                : (bin.LiveFolderSort == LiveFolderSortOrder.TypeThenName ? "Type & name" : "Name A–Z");
+
+            var card = new Border
+            {
+                Background = FluentTheme.GetTintedPillBgBrush(bin.AccentColorHex, 24),
+                BorderBrush = FluentTheme.GetEffectiveAccentBrush(bin.AccentColorHex),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(14, 10, 12, 10),
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var folderIcon = FluentTheme.CreateFluentIcon("\uE8F4", 16, FluentTheme.GetEffectiveAccentBrush(bin.AccentColorHex));
+            folderIcon.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 12, 0));
+            Grid.SetColumn(folderIcon, 0);
+            grid.Children.Add(folderIcon);
+
+            var textStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            textStack.Children.Add(new TextBlock
+            {
+                Text = $"Smart Live Folder: {leaf}",
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = FluentTheme.TextPrimary
+            });
+            textStack.Children.Add(new TextBlock
+            {
+                Text = $"{expandedFolder}  •  Up to {Math.Max(1, bin.LiveFolderMaxItems)} items ({sortLabel})",
+                FontSize = 11.5,
+                Foreground = FluentTheme.TextMuted,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Margin = new Thickness(0, 1, 10, 0)
+            });
+            Grid.SetColumn(textStack, 1);
+            grid.Children.Add(textStack);
+
+            var btns = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var openDirBtn = FluentTheme.CreateButton("Open", padding: new Thickness(10, 4, 10, 4), iconGlyph: "\uE8A7");
+            openDirBtn.Margin = new Thickness(0, 0, 6, 0);
+            openDirBtn.Click += (_, __) =>
+            {
+                try
+                {
+                    if (Directory.Exists(expandedFolder))
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = "explorer.exe",
+                            Arguments = $"\"{expandedFolder}\"",
+                            UseShellExecute = true
+                        });
+                    }
+                }
+                catch { }
+            };
+            btns.Children.Add(openDirBtn);
+
+            var cfgBtn = FluentTheme.CreateIconButton("\uE713", "Configure Smart Live Folder", size: 28, iconSize: 11.5);
+            cfgBtn.Click += (_, __) => SetFlyoutOptionsOpen(true);
+            btns.Children.Add(cfgBtn);
+
+            var clearBtn = FluentTheme.CreateIconButton("\uE711", "Disconnect live folder", size: 28, iconSize: 10.5);
+            clearBtn.Click += (_, __) =>
+            {
+                bin.LiveFolderPath = string.Empty;
+                SaveAndSyncSelectedBin(bumpIcon: true);
+            };
+            btns.Children.Add(clearBtn);
+
+            Grid.SetColumn(btns, 2);
+            grid.Children.Add(btns);
+            card.Child = grid;
+            return card;
+        }
+
+        private void OpenNewBinPresetMenu(FrameworkElement anchor)
+        {
+            var menu = FluentTheme.CreateDarkContextMenu();
+            menu.PlacementTarget = anchor;
+            menu.Placement = PlacementMode.Bottom;
+
+            menu.Items.Add(FluentTheme.CreateMenuItem("Empty Bin", () => CreateNewBin_Click(null, null), iconGlyph: "\uE710"));
+            menu.Items.Add(FluentTheme.CreateMenuSeparator());
+            menu.Items.Add(FluentTheme.CreateMenuItem("Downloads Smart Bin (Live)", () =>
+            {
+                CreateSmartFolderBin("Downloads", GetDownloadsFolderPath(), "#06B6D4", LiveFolderSortOrder.NewestFirst);
+            }, iconGlyph: "\uE896"));
+            menu.Items.Add(FluentTheme.CreateMenuItem("Desktop Smart Bin (Live)", () =>
+            {
+                CreateSmartFolderBin("Desktop", Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "#3B82F6", LiveFolderSortOrder.NewestFirst);
+            }, iconGlyph: "\uE8FC"));
+            menu.Items.Add(FluentTheme.CreateMenuItem("Documents Smart Bin (Live)", () =>
+            {
+                CreateSmartFolderBin("Documents", Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "#8B5CF6", LiveFolderSortOrder.NewestFirst);
+            }, iconGlyph: "\uE8A5"));
+            menu.Items.Add(FluentTheme.CreateMenuItem("Custom Live Folder Bin...", () =>
+            {
+                using (var dlg = new System.Windows.Forms.FolderBrowserDialog())
+                {
+                    dlg.Description = "Choose a folder to create a Smart Live Bin";
+                    dlg.ShowNewFolderButton = false;
+                    if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK && !string.IsNullOrWhiteSpace(dlg.SelectedPath))
+                    {
+                        CreateSmartFolderBin(GetFolderLeafLabel(dlg.SelectedPath), dlg.SelectedPath, "#10B981", LiveFolderSortOrder.NewestFirst);
+                    }
+                }
+            }, iconGlyph: "\uE8F4"));
+
+            menu.IsOpen = true;
+        }
+
+        private void CreateSmartFolderBin(string name, string folderPath, string accentHex, LiveFolderSortOrder sortOrder)
+        {
+            if (string.IsNullOrWhiteSpace(folderPath) || _configService.Current == null)
+                return;
+
+            var newBin = new BinGroup
+            {
+                Id = Guid.NewGuid().ToString("N").Substring(0, 10),
+                Name = string.IsNullOrWhiteSpace(name) ? "Smart Bin" : name,
+                IconMode = BinIconMode.GridMosaic,
+                ShowMosaicBackplate = true,
+                AccentColorHex = accentHex ?? string.Empty,
+                Columns = 4,
+                LiveFolderPath = folderPath,
+                LiveFolderMaxItems = 12,
+                LiveFolderSort = sortOrder,
+                IsEnabledOnTaskbar = false,
+                HideRunningAppsOnTaskbar = _configService.Current?.HideRunningAppsOnTaskbar ?? false
+            };
+
+            _configService.Current.Bins.Add(newBin);
+            _activePane = WorkspacePane.Bin;
+            _selectedBin = newBin;
+            _configService.Save(notify: false);
+            JumpListService.SyncManagerJumpList(_configService, _iconService);
+            RefreshFullUi();
+        }
+
+        private void SetBinAccentColor(string hex)
+        {
+            if (_selectedBin == null)
+                return;
+
+            string normalized = (hex ?? string.Empty).Trim();
+            if (string.Equals(_selectedBin.AccentColorHex ?? string.Empty, normalized, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            _selectedBin.AccentColorHex = normalized;
+            if (!string.IsNullOrEmpty(normalized) && _selectedBin.IconMode == BinIconMode.GridMosaic)
+            {
+                _selectedBin.ShowMosaicBackplate = true;
+            }
+            SaveAndSyncSelectedBin(bumpIcon: true);
+        }
+
+        private void SetSectionLayout(BinSectionLayout layout)
+        {
+            if (_selectedBin == null || _selectedBin.SectionLayout == layout)
+                return;
+
+            _selectedBin.SectionLayout = layout;
+            SaveAndSyncSelectedBin(bumpIcon: false);
+        }
+
+        private void LiveFolderButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_selectedBin == null || !(sender is FrameworkElement anchor))
+                return;
+
+            var menu = FluentTheme.CreateDarkContextMenu();
+            menu.PlacementTarget = anchor;
+            menu.Placement = PlacementMode.Bottom;
+
+            void ApplyLivePath(string path)
+            {
+                if (string.IsNullOrWhiteSpace(path) || _selectedBin == null)
+                    return;
+                _selectedBin.LiveFolderPath = path;
+                SaveAndSyncSelectedBin(bumpIcon: true);
+            }
+
+            menu.Items.Add(FluentTheme.CreateMenuItem("Downloads", () => ApplyLivePath(GetDownloadsFolderPath()), iconGlyph: "\uE896"));
+            menu.Items.Add(FluentTheme.CreateMenuItem("Desktop", () => ApplyLivePath(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)), iconGlyph: "\uE8FC"));
+            menu.Items.Add(FluentTheme.CreateMenuItem("Documents", () => ApplyLivePath(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)), iconGlyph: "\uE8A5"));
+            menu.Items.Add(FluentTheme.CreateMenuSeparator());
+            menu.Items.Add(FluentTheme.CreateMenuItem("Choose folder...", () =>
+            {
+                using (var dlg = new System.Windows.Forms.FolderBrowserDialog())
+                {
+                    dlg.Description = "Choose a folder whose files & subfolders should appear live inside this Bin";
+                    dlg.ShowNewFolderButton = false;
+                    if (!string.IsNullOrWhiteSpace(_selectedBin.LiveFolderPath) && Directory.Exists(_selectedBin.LiveFolderPath))
+                    {
+                        dlg.SelectedPath = _selectedBin.LiveFolderPath;
+                    }
+                    if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK && !string.IsNullOrWhiteSpace(dlg.SelectedPath))
+                    {
+                        ApplyLivePath(dlg.SelectedPath);
+                    }
+                }
+            }, iconGlyph: "\uE8B7"));
+
+            menu.IsOpen = true;
+        }
+
+        private void SetLiveFolderSort(LiveFolderSortOrder sort)
+        {
+            if (_selectedBin == null || _selectedBin.LiveFolderSort == sort)
+                return;
+
+            _selectedBin.LiveFolderSort = sort;
+            SaveAndSyncSelectedBin(bumpIcon: true);
+        }
+
+        private void AdjustLiveMaxItems(int delta)
+        {
+            if (_selectedBin == null)
+                return;
+
+            int cur = Math.Max(4, Math.Min(48, _selectedBin.LiveFolderMaxItems <= 0 ? 12 : _selectedBin.LiveFolderMaxItems));
+            int next = Math.Max(4, Math.Min(48, cur + delta));
+            if (next != _selectedBin.LiveFolderMaxItems)
+            {
+                _selectedBin.LiveFolderMaxItems = next;
+                SaveAndSyncSelectedBin(bumpIcon: false);
+            }
+        }
+
+        private static string GetFolderLeafLabel(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return "Folder";
+
+            string trimmed = path.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string leaf = Path.GetFileName(trimmed);
+            return string.IsNullOrWhiteSpace(leaf) ? trimmed : leaf;
+        }
+
+        private static string GetDownloadsFolderPath()
+        {
+            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            return Path.Combine(profile, "Downloads");
         }
 
         private void CreateNewBin_Click(object sender, RoutedEventArgs e)
@@ -3820,7 +4655,7 @@ namespace WinBins.Views
             _selectedBin = _configService.Current?.Bins?.FirstOrDefault();
             _taskbarManager.SyncAllBins();
             _runningAppsManager?.SyncRunningWindows();
-            _hotkeyManager?.SyncHotkeys(_configService.Current?.Bins);
+            SyncAllHotkeys();
             RefreshFullUi();
         }
 

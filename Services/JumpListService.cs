@@ -163,15 +163,20 @@ namespace WinBins.Services
                     }
                 }
 
-                if (items.Count >= 2 && items.Count <= 10)
+                var workspaceItems = items.FindAll(it => it != null && it.IncludeInOpenAll && !BinItem.IsSystemCommand(it.TargetPath));
+                if (workspaceItems.Count >= 1 && workspaceItems.Count <= 16 && (items.Count >= 2 || workspaceItems.Count != items.Count))
                 {
                     string openAllIco = EnsureGlyphJumpListIco(configService, "open_all", "\uE8A7");
+                    bool subset = workspaceItems.Count < items.Count;
+                    string openLabel = subset
+                        ? $"Open workspace ({workspaceItems.Count} items)"
+                        : $"Open all ({workspaceItems.Count} items)";
                     object openAllLink = CreateJumpListLink(
                         exePath,
                         $"--open-all \"{bin.Id}\"",
                         workDir,
-                        $"Open all ({items.Count} items)",
-                        $"Open every item in {bin.Name}",
+                        openLabel,
+                        $"Launch workspace items in {bin.Name}",
                         openAllIco,
                         0);
                     tasksCollection.AddObject(openAllLink);
@@ -297,6 +302,18 @@ namespace WinBins.Services
                         comObjectsToRelease.Add(link);
                     }
                 }
+
+                string searchIco = EnsureGlyphJumpListIco(configService, "omni_search", "\uE721");
+                object searchLink = CreateJumpListLink(
+                    exePath,
+                    "--search",
+                    workDir,
+                    "Search all Bins",
+                    "Quickly search and launch items across all Bins",
+                    searchIco,
+                    0);
+                tasks.AddObject(searchLink);
+                comObjectsToRelease.Add(searchLink);
 
                 string newIco = EnsureGlyphJumpListIco(configService, "add_item", "\uE710");
                 object newBinLink = CreateJumpListLink(

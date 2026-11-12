@@ -13,10 +13,12 @@ namespace WinBins.Services
 
         private HwndSource _hwndSource;
         private readonly Dictionary<int, BinGroup> _registeredBins = new Dictionary<int, BinGroup>();
+        private int _globalSearchHotkeyId = -1;
         private int _nextHotkeyId = 9100;
         private bool _disposed;
 
         public event Action<BinGroup> BinHotkeyPressed;
+        public event Action GlobalSearchHotkeyPressed;
 
         public GlobalHotkeyManager()
         {
@@ -49,7 +51,7 @@ namespace WinBins.Services
             }
         }
 
-        public void SyncHotkeys(IEnumerable<BinGroup> bins)
+        public void SyncHotkeys(IEnumerable<BinGroup> bins, string globalSearchHotkey = null)
         {
             if (_disposed)
                 return;
@@ -59,6 +61,16 @@ namespace WinBins.Services
                 return;
 
             UnregisterAll();
+
+            if (!string.IsNullOrWhiteSpace(globalSearchHotkey) &&
+                TryParseHotkey(globalSearchHotkey, out uint searchMods, out uint searchVk))
+            {
+                int searchId = _nextHotkeyId++;
+                if (Win32Interop.RegisterHotKey(_hwndSource.Handle, searchId, searchMods | Win32Interop.MOD_NOREPEAT, searchVk))
+                {
+                    _globalSearchHotkeyId = searchId;
+                }
+            }
 
             if (bins == null)
                 return;
@@ -83,6 +95,11 @@ namespace WinBins.Services
         {
             if (_hwndSource != null && _hwndSource.Handle != IntPtr.Zero)
             {
+                if (_globalSearchHotkeyId != -1)
+                {
+                    try { Win32Interop.UnregisterHotKey(_hwndSource.Handle, _globalSearchHotkeyId); } catch { }
+                }
+
                 foreach (int id in _registeredBins.Keys)
                 {
                     try
@@ -94,6 +111,7 @@ namespace WinBins.Services
                     }
                 }
             }
+            _globalSearchHotkeyId = -1;
             _registeredBins.Clear();
         }
 
@@ -102,7 +120,12 @@ namespace WinBins.Services
             if (msg == Win32Interop.WM_HOTKEY)
             {
                 int id = wParam.ToInt32();
-                if (_registeredBins.TryGetValue(id, out BinGroup bin) && bin != null)
+                if (_globalSearchHotkeyId != -1 && id == _globalSearchHotkeyId)
+                {
+                    handled = true;
+                    GlobalSearchHotkeyPressed?.Invoke();
+                }
+                else if (_registeredBins.TryGetValue(id, out BinGroup bin) && bin != null)
                 {
                     handled = true;
                     BinHotkeyPressed?.Invoke(bin);

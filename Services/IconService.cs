@@ -50,6 +50,67 @@ namespace WinBins.Services
                 return;
             }
 
+            if (item.Kind == BinItemKind.SystemCommand || BinItem.IsSystemCommand(item.TargetPath))
+            {
+                string sys32 = Environment.GetFolderPath(Environment.SpecialFolder.System);
+                string action = BinItem.GetSystemActionKey(item.TargetPath);
+                switch (action)
+                {
+                    case "recyclebin":
+                        Win32Interop.TryGetRecycleBinStatus(out long rbCount, out _);
+                        bool hasTrash = rbCount > 0;
+                        sourcePath = Path.Combine(sys32, "imageres.dll");
+                        resourceIndex = hasTrash ? -54 : -55;
+                        cacheKey = hasTrash ? $"sys|recycle_full|{sourcePath}|-54" : $"sys|recycle_empty|{sourcePath}|-55";
+                        return;
+                    case "lock":
+                        sourcePath = "__fluent_sys__|lock";
+                        resourceIndex = 0;
+                        cacheKey = "sys|fluent|lock";
+                        return;
+                    case "sleep":
+                        sourcePath = "__fluent_sys__|sleep";
+                        resourceIndex = 0;
+                        cacheKey = "sys|fluent|sleep";
+                        return;
+                    case "restart":
+                        sourcePath = "__fluent_sys__|restart";
+                        resourceIndex = 0;
+                        cacheKey = "sys|fluent|restart";
+                        return;
+                    case "shutdown":
+                        sourcePath = "__fluent_sys__|shutdown";
+                        resourceIndex = 0;
+                        cacheKey = "sys|fluent|shutdown";
+                        return;
+                    case "snip":
+                        sourcePath = "__fluent_sys__|snip";
+                        resourceIndex = 0;
+                        cacheKey = "sys|fluent|snip";
+                        return;
+                    case "taskmgr":
+                        sourcePath = Path.Combine(sys32, "Taskmgr.exe");
+                        resourceIndex = 0;
+                        cacheKey = $"sys|taskmgr|{sourcePath}|0";
+                        return;
+                    case "settings":
+                        sourcePath = "__fluent_sys__|settings";
+                        resourceIndex = 0;
+                        cacheKey = "sys|fluent|settings";
+                        return;
+                    case "powershell":
+                        sourcePath = Path.Combine(sys32, @"WindowsPowerShell\v1.0\powershell.exe");
+                        resourceIndex = 0;
+                        cacheKey = $"sys|powershell|{sourcePath}|0";
+                        return;
+                    default:
+                        sourcePath = Path.Combine(sys32, "imageres.dll");
+                        resourceIndex = -114;
+                        cacheKey = $"sys|default|{sourcePath}|-114";
+                        return;
+                }
+            }
+
             if (item.Kind == BinItemKind.WebUrl || BinItem.IsWebUrl(item.TargetPath))
             {
                 string sys32 = Environment.GetFolderPath(Environment.SpecialFolder.System);
@@ -92,6 +153,12 @@ namespace WinBins.Services
 
             return _bitmapCache.GetOrAdd(cacheKey, _ =>
             {
+                if (sourcePath.StartsWith("__fluent_sys__|", StringComparison.Ordinal))
+                {
+                    string sysAction = sourcePath.Substring("__fluent_sys__|".Length);
+                    return CreateSystemActionBitmap(sysAction);
+                }
+
                 Bitmap extracted = Win32Interop.ExtractHighResIconBitmap(sourcePath, resourceIndex, 256);
                 return extracted ?? CreateFallbackItemBitmap();
             });
@@ -117,6 +184,56 @@ namespace WinBins.Services
             });
         }
 
+        public static System.Drawing.Color? TryParseDrawingColor(string hex)
+        {
+            if (string.IsNullOrWhiteSpace(hex))
+                return null;
+
+            try
+            {
+                string clean = hex.Trim();
+                if (!clean.StartsWith("#", StringComparison.Ordinal))
+                    clean = "#" + clean;
+                System.Drawing.Color parsed = ColorTranslator.FromHtml(clean);
+                return System.Drawing.Color.FromArgb(255, parsed.R, parsed.G, parsed.B);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private List<Bitmap> CollectMosaicSubIcons(BinGroup bin)
+        {
+            var subIcons = new List<Bitmap>(4);
+            if (bin?.Items != null)
+            {
+                for (int i = 0; i < bin.Items.Count && subIcons.Count < 4; i++)
+                {
+                    Bitmap itemBmp = GetItemBitmap(bin.Items[i]);
+                    if (itemBmp != null)
+                    {
+                        subIcons.Add(itemBmp);
+                    }
+                }
+            }
+
+            if (subIcons.Count < 4 && bin != null && !string.IsNullOrWhiteSpace(bin.LiveFolderPath))
+            {
+                List<BinItem> liveItems = LauncherService.GetLiveFolderItems(bin, 4 - subIcons.Count);
+                for (int i = 0; i < liveItems.Count && subIcons.Count < 4; i++)
+                {
+                    Bitmap liveBmp = GetItemBitmap(liveItems[i]);
+                    if (liveBmp != null)
+                    {
+                        subIcons.Add(liveBmp);
+                    }
+                }
+            }
+
+            return subIcons;
+        }
+
         /// <summary>
         /// Creates the 128x128 transparent ARGB Bitmap for a BinGroup (either GridMosaic or CustomIcon).
         /// </summary>
@@ -137,20 +254,9 @@ namespace WinBins.Services
                 }
             }
 
-            var subIcons = new List<Bitmap>(4);
-            if (bin.Items != null)
-            {
-                for (int i = 0; i < bin.Items.Count && subIcons.Count < 4; i++)
-                {
-                    Bitmap itemBmp = GetItemBitmap(bin.Items[i]);
-                    if (itemBmp != null)
-                    {
-                        subIcons.Add(itemBmp);
-                    }
-                }
-            }
-
-            return Win32Interop.CreateGroupMosaicBitmap(subIcons, bin.ShowMosaicBackplate);
+            List<Bitmap> subIcons = CollectMosaicSubIcons(bin);
+            System.Drawing.Color? tint = TryParseDrawingColor(bin.AccentColorHex);
+            return Win32Interop.CreateGroupMosaicBitmap(subIcons, bin.ShowMosaicBackplate, tint);
         }
 
         /// <summary>
@@ -175,20 +281,9 @@ namespace WinBins.Services
                 }
             }
 
-            var subIcons = new List<Bitmap>(4);
-            if (bin?.Items != null)
-            {
-                for (int i = 0; i < bin.Items.Count && subIcons.Count < 4; i++)
-                {
-                    Bitmap itemBmp = GetItemBitmap(bin.Items[i]);
-                    if (itemBmp != null)
-                    {
-                        subIcons.Add(itemBmp);
-                    }
-                }
-            }
-
-            return Win32Interop.CreateGroupMosaicIconHandle(subIcons, bin?.ShowMosaicBackplate ?? false);
+            List<Bitmap> subIcons = CollectMosaicSubIcons(bin);
+            System.Drawing.Color? tint = TryParseDrawingColor(bin?.AccentColorHex);
+            return Win32Interop.CreateGroupMosaicIconHandle(subIcons, bin?.ShowMosaicBackplate ?? false, tint);
         }
 
         public IntPtr CreateBinSmallIconHandle(BinGroup bin, int size = 32)
@@ -211,6 +306,8 @@ namespace WinBins.Services
             }
 
             var sb = new System.Text.StringBuilder(bin.ShowMosaicBackplate ? "GridPlate" : "Grid");
+            sb.Append('|').Append(bin.AccentColorHex ?? string.Empty);
+            sb.Append('|').Append(bin.LiveFolderPath ?? string.Empty);
             if (bin.Items != null)
             {
                 for (int i = 0; i < bin.Items.Count && i < 4; i++)
@@ -538,6 +635,76 @@ namespace WinBins.Services
             {
                 bitmap.UnlockBits(data);
             }
+        }
+
+        private static Bitmap CreateSystemActionBitmap(string sysAction)
+        {
+            switch ((sysAction ?? string.Empty).ToLowerInvariant())
+            {
+                case "snip":
+                {
+                    Bitmap pkg = Win32Interop.ExtractHighResIconBitmap(@"shell:AppsFolder\Microsoft.ScreenSketch_8wekyb3d8bbwe!App", 0, 256);
+                    if (pkg != null) return pkg;
+                    return CreateFluentGlyphTileBitmap("\uE7A6", System.Drawing.Color.FromArgb(245, 14, 165, 233), System.Drawing.Color.FromArgb(245, 2, 132, 199));
+                }
+                case "settings":
+                {
+                    Bitmap pkg = Win32Interop.ExtractHighResIconBitmap(@"shell:AppsFolder\windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel", 0, 256);
+                    if (pkg != null) return pkg;
+                    return CreateFluentGlyphTileBitmap("\uE713", System.Drawing.Color.FromArgb(245, 59, 130, 246), System.Drawing.Color.FromArgb(245, 37, 99, 235));
+                }
+                case "lock":
+                    return CreateFluentGlyphTileBitmap("\uE72E", System.Drawing.Color.FromArgb(245, 59, 130, 246), System.Drawing.Color.FromArgb(245, 29, 78, 216));
+                case "sleep":
+                    return CreateFluentGlyphTileBitmap("\uE708", System.Drawing.Color.FromArgb(245, 139, 92, 246), System.Drawing.Color.FromArgb(245, 91, 33, 182));
+                case "restart":
+                    return CreateFluentGlyphTileBitmap("\uE777", System.Drawing.Color.FromArgb(245, 16, 185, 129), System.Drawing.Color.FromArgb(245, 4, 120, 87));
+                case "shutdown":
+                    return CreateFluentGlyphTileBitmap("\uE7E8", System.Drawing.Color.FromArgb(245, 239, 68, 68), System.Drawing.Color.FromArgb(245, 185, 28, 28));
+                default:
+                    return CreateFluentGlyphTileBitmap("\uE770", System.Drawing.Color.FromArgb(245, 71, 85, 105), System.Drawing.Color.FromArgb(245, 51, 65, 85));
+            }
+        }
+
+        private static Bitmap CreateFluentGlyphTileBitmap(string glyph, System.Drawing.Color topColor, System.Drawing.Color bottomColor)
+        {
+            var bmp = new Bitmap(128, 128, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                g.Clear(System.Drawing.Color.Transparent);
+
+                var rect = new Rectangle(10, 10, 108, 108);
+                using (GraphicsPath path = Win32Interop.CreateRoundedRectPath(rect, 26))
+                using (var fill = new System.Drawing.Drawing2D.LinearGradientBrush(rect, topColor, bottomColor, 90f))
+                using (var borderPen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(95, 255, 255, 255), 2f))
+                {
+                    g.FillPath(fill, path);
+                    g.DrawPath(borderPen, path);
+                }
+
+                string fontName = "Segoe Fluent Icons";
+                using (var testFamily = new System.Drawing.Font(fontName, 44f, System.Drawing.FontStyle.Regular, GraphicsUnit.Pixel))
+                {
+                    if (!string.Equals(testFamily.Name, fontName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        fontName = "Segoe MDL2 Assets";
+                    }
+                }
+
+                using (var iconFont = new System.Drawing.Font(fontName, 54f, System.Drawing.FontStyle.Regular, GraphicsUnit.Pixel))
+                using (var fg = new System.Drawing.SolidBrush(System.Drawing.Color.White))
+                using (var sf = new System.Drawing.StringFormat
+                {
+                    Alignment = System.Drawing.StringAlignment.Center,
+                    LineAlignment = System.Drawing.StringAlignment.Center
+                })
+                {
+                    g.DrawString(glyph, iconFont, fg, new RectangleF(10, 12, 108, 106), sf);
+                }
+            }
+            return bmp;
         }
 
         private static Bitmap CreateFallbackItemBitmap()

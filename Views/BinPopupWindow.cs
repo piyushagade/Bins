@@ -42,7 +42,10 @@ namespace WinBins.Views
 
         private readonly Border _filterBar;
         private readonly TextBlock _filterTextBlock;
+        private readonly ScrollViewer _sectionTabsScroll;
+        private readonly StackPanel _sectionTabsPanel;
         private readonly ScrollViewer _gridScroll;
+        private readonly StackPanel _contentHostStack;
         private readonly UniformGrid _itemsGrid;
         private readonly Border _emptyStatePanel;
         private readonly TextBlock _emptyTitleText;
@@ -59,6 +62,8 @@ namespace WinBins.Views
         private bool _suppressDeactivateClose;
 
         private string _filterText = string.Empty;
+        private string _activeSectionTab = null; // null = All
+        private readonly List<string> _availableTabs = new List<string>();
         private int _selectedTileIndex = -1;
         private readonly List<TileEntry> _displayedTiles = new List<TileEntry>();
 
@@ -276,6 +281,21 @@ namespace WinBins.Views
             _filterBar.Child = filterDock;
             mainStack.Children.Add(_filterBar);
 
+            // Named section pill tabs bar (shown when Bin has categorized items and SectionLayout == Tabs)
+            _sectionTabsPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal
+            };
+            _sectionTabsScroll = new ScrollViewer
+            {
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Margin = new Thickness(2, 0, 2, 6),
+                Visibility = Visibility.Collapsed,
+                Content = _sectionTabsPanel
+            };
+            mainStack.Children.Add(_sectionTabsScroll);
+
             // Empty state panel
             _emptyStatePanel = new Border
             {
@@ -304,19 +324,25 @@ namespace WinBins.Views
             _emptyStatePanel.Child = emptyStack;
             mainStack.Children.Add(_emptyStatePanel);
 
-            // Items grid inside a max-height scroll viewer
+            // Items grid / stacked section host inside a max-height scroll viewer
             _itemsGrid = new UniformGrid
             {
                 Columns = 4,
                 HorizontalAlignment = HorizontalAlignment.Left
             };
 
+            _contentHostStack = new StackPanel
+            {
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            _contentHostStack.Children.Add(_itemsGrid);
+
             _gridScroll = new ScrollViewer
             {
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 MaxHeight = 420,
-                Content = _itemsGrid
+                Content = _contentHostStack
             };
             mainStack.Children.Add(_gridScroll);
 
@@ -423,6 +449,7 @@ namespace WinBins.Views
 
             _currentBin = bin;
             _filterText = string.Empty;
+            _activeSectionTab = null;
             _selectedTileIndex = -1;
             _openedByHover = openedByHover;
             _hoverOutsideStartTick = 0;
@@ -594,6 +621,8 @@ namespace WinBins.Views
             if (_currentBin == null)
                 return;
 
+            Brush binAccent = FluentTheme.GetEffectiveAccentBrush(_currentBin.AccentColorHex);
+
             bool showTitle = _currentBin.ShowFlyoutTitle;
             bool showAdd = _currentBin.ShowFlyoutAddButton;
             bool showEdit = _currentBin.ShowFlyoutEditButton;
@@ -616,6 +645,9 @@ namespace WinBins.Views
             }
 
             _headerTitle.Text = _currentBin.Name;
+            _headerTitle.Foreground = string.IsNullOrWhiteSpace(_currentBin.AccentColorHex)
+                ? FluentTheme.TextSecondary
+                : binAccent;
 
             bool hasFilter = !string.IsNullOrWhiteSpace(_filterText);
             _filterBar.Visibility = hasFilter ? Visibility.Visible : Visibility.Collapsed;
@@ -626,38 +658,160 @@ namespace WinBins.Views
 
             int pad = Math.Max(0, Math.Min(20, _currentBin.ItemPadding));
             double outerSide = Math.Max(6, 6 + pad * 0.6);
-            double outerTop = (anyHeader || hasFilter) ? 9 : outerSide;
-            _outerBorder.Padding = new Thickness(outerSide, outerTop, outerSide, outerSide);
 
             _itemsGrid.Children.Clear();
+            _contentHostStack.Children.Clear();
+            _sectionTabsPanel.Children.Clear();
+            _availableTabs.Clear();
             _displayedTiles.Clear();
 
-            var allItems = _currentBin.Items ?? new List<BinItem>();
-            if (allItems.Count == 0)
+            var combined = new List<Tuple<BinItem, int>>();
+            var pinnedItems = _currentBin.Items ?? new List<BinItem>();
+            for (int i = 0; i < pinnedItems.Count; i++)
             {
-                _emptyTitleText.Text = "Empty Bin";
-                _emptySubText.Text = "Drop items here or right-click to add";
+                if (pinnedItems[i] != null)
+                {
+                    combined.Add(Tuple.Create(pinnedItems[i], i));
+                }
+            }
+
+            bool hasLiveFolder = !string.IsNullOrWhiteSpace(_currentBin.LiveFolderPath);
+            if (hasLiveFolder)
+            {
+                List<BinItem> liveItems = LauncherService.GetLiveFolderItems(_currentBin);
+                string liveSectionName = pinnedItems.Count > 0 ? "Live Folder" : string.Empty;
+                foreach (BinItem live in liveItems)
+                {
+                    live.Section = liveSectionName;
+                    combined.Add(Tuple.Create(live, -1));
+                }
+            }
+
+            if (combined.Count == 0)
+            {
+                _sectionTabsScroll.Visibility = Visibility.Collapsed;
+                double emptyOuterTop = (anyHeader || hasFilter) ? 9 : outerSide;
+                _outerBorder.Padding = new Thickness(outerSide, emptyOuterTop, outerSide, outerSide);
+                _emptyTitleText.Text = hasLiveFolder ? "Folder is Empty" : "Empty Bin";
+                _emptySubText.Text = hasLiveFolder
+                    ? _currentBin.LiveFolderPath
+                    : "Drop items here or right-click to add";
                 _emptyStatePanel.Visibility = Visibility.Visible;
                 _gridScroll.Visibility = Visibility.Collapsed;
                 return;
             }
 
-            var matching = new List<Tuple<BinItem, int>>();
-            for (int i = 0; i < allItems.Count; i++)
+            // Discover named sections
+            var sectionNames = combined
+                .Select(t => (t.Item1.Section ?? string.Empty).Trim())
+                .Where(s => !string.IsNullOrEmpty(s))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            bool hasSections = sectionNames.Count > 0 && !hasFilter;
+            bool useTabs = hasSections && _currentBin.SectionLayout == BinSectionLayout.Tabs;
+            bool useStackedHeaders = hasSections && _currentBin.SectionLayout == BinSectionLayout.StackedHeaders;
+
+            if (useTabs)
             {
-                BinItem it = allItems[i];
-                if (!hasFilter ||
-                    (!string.IsNullOrEmpty(it.Name) && it.Name.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0) ||
-                    (!string.IsNullOrEmpty(it.TargetPath) && it.TargetPath.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0))
+                _availableTabs.Add(null); // All
+                bool hasUngrouped = combined.Any(t => string.IsNullOrWhiteSpace(t.Item1.Section));
+                if (hasUngrouped)
                 {
-                    matching.Add(Tuple.Create(it, i));
+                    _availableTabs.Add("__ungrouped__");
                 }
+                foreach (string sec in sectionNames)
+                {
+                    _availableTabs.Add(sec);
+                }
+
+                if (_activeSectionTab != null &&
+                    !_availableTabs.Any(t => string.Equals(t, _activeSectionTab, StringComparison.OrdinalIgnoreCase)))
+                {
+                    _activeSectionTab = null;
+                }
+
+                foreach (string tabKey in _availableTabs)
+                {
+                    string capturedKey = tabKey;
+                    string label = tabKey == null
+                        ? "All"
+                        : (tabKey == "__ungrouped__" ? "General" : tabKey);
+                    bool isActive = string.Equals(_activeSectionTab, capturedKey, StringComparison.OrdinalIgnoreCase);
+
+                    var pill = new Border
+                    {
+                        CornerRadius = new CornerRadius(11),
+                        Padding = new Thickness(10, 3, 10, 3),
+                        Margin = new Thickness(0, 0, 5, 0),
+                        Cursor = Cursors.Hand,
+                        Background = isActive
+                            ? FluentTheme.GetTintedPillBgBrush(_currentBin.AccentColorHex, 48)
+                            : FluentTheme.CardBg,
+                        BorderBrush = isActive ? binAccent : FluentTheme.CardBorder,
+                        BorderThickness = new Thickness(1),
+                        Child = new TextBlock
+                        {
+                            Text = label,
+                            FontSize = 11.5,
+                            FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
+                            Foreground = isActive ? FluentTheme.TextPrimary : FluentTheme.TextSecondary
+                        }
+                    };
+                    pill.MouseLeftButtonUp += (_, e) =>
+                    {
+                        _activeSectionTab = capturedKey;
+                        _selectedTileIndex = -1;
+                        RebuildContent();
+                        UpdateLayout();
+                        e.Handled = true;
+                    };
+                    _sectionTabsPanel.Children.Add(pill);
+                }
+                _sectionTabsScroll.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                _sectionTabsScroll.Visibility = Visibility.Collapsed;
+            }
+
+            double outerTop = (anyHeader || hasFilter || useTabs) ? 9 : outerSide;
+            _outerBorder.Padding = new Thickness(outerSide, outerTop, outerSide, outerSide);
+
+            var matching = new List<Tuple<BinItem, int>>();
+            foreach (var pair in combined)
+            {
+                BinItem it = pair.Item1;
+                if (hasFilter)
+                {
+                    bool matchesText =
+                        (!string.IsNullOrEmpty(it.Name) && it.Name.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                        (!string.IsNullOrEmpty(it.Section) && it.Section.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                        (!string.IsNullOrEmpty(it.TargetPath) && it.TargetPath.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (!matchesText)
+                        continue;
+                }
+                else if (useTabs && _activeSectionTab != null)
+                {
+                    string itemSec = (it.Section ?? string.Empty).Trim();
+                    if (_activeSectionTab == "__ungrouped__")
+                    {
+                        if (!string.IsNullOrEmpty(itemSec))
+                            continue;
+                    }
+                    else if (!string.Equals(itemSec, _activeSectionTab, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                }
+
+                matching.Add(pair);
             }
 
             if (matching.Count == 0)
             {
                 _emptyTitleText.Text = "No matching items";
-                _emptySubText.Text = "Press Esc to clear filter";
+                _emptySubText.Text = hasFilter ? "Press Esc to clear filter" : "No items in this category";
                 _emptyStatePanel.Visibility = Visibility.Visible;
                 _gridScroll.Visibility = Visibility.Collapsed;
                 return;
@@ -676,8 +830,6 @@ namespace WinBins.Views
             }
 
             int cols = Math.Max(1, Math.Min(10, _currentBin.Columns));
-            _itemsGrid.Columns = Math.Min(cols, Math.Max(1, matching.Count));
-
             GetDensityMetrics(out double iconSize, out double baseTileW, out double baseTileH, out double fontSize, out double labelMaxH);
             double tileW = baseTileW + pad * 1.2;
             double tileH = baseTileH + pad * 1.2;
@@ -693,42 +845,115 @@ namespace WinBins.Views
                 _gridScroll.MaxHeight = 440;
             }
 
-            for (int displayIdx = 0; displayIdx < matching.Count; displayIdx++)
+            if (useStackedHeaders)
             {
-                BinItem item = matching[displayIdx].Item1;
-                int originalIndex = matching[displayIdx].Item2;
-                Border tileBorder = CreateItemTile(
-                    item,
-                    originalIndex,
-                    displayIdx,
-                    iconSize,
-                    tileW,
-                    tileH,
-                    marginHalf,
-                    pad,
-                    fontSize,
-                    labelMaxH);
-
-                _displayedTiles.Add(new TileEntry
+                var groups = new List<Tuple<string, List<Tuple<BinItem, int>>>>();
+                var ungrouped = matching.Where(m => string.IsNullOrWhiteSpace(m.Item1.Section)).ToList();
+                if (ungrouped.Count > 0)
                 {
-                    Item = item,
-                    OriginalIndex = originalIndex,
-                    TileBorder = tileBorder
-                });
-                _itemsGrid.Children.Add(tileBorder);
+                    groups.Add(Tuple.Create("General", ungrouped));
+                }
+                foreach (string sec in sectionNames)
+                {
+                    var secItems = matching
+                        .Where(m => string.Equals((m.Item1.Section ?? string.Empty).Trim(), sec, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    if (secItems.Count > 0)
+                    {
+                        groups.Add(Tuple.Create(sec, secItems));
+                    }
+                }
+
+                int runningDisplayIdx = 0;
+                _itemsGrid.Columns = cols;
+                for (int gIdx = 0; gIdx < groups.Count; gIdx++)
+                {
+                    var grp = groups[gIdx];
+                    _contentHostStack.Children.Add(new TextBlock
+                    {
+                        Text = grp.Item1,
+                        FontSize = 11.5,
+                        FontWeight = FontWeights.SemiBold,
+                        Foreground = FluentTheme.TextMuted,
+                        Margin = new Thickness(6, gIdx == 0 ? 2 : 10, 4, 3)
+                    });
+
+                    var secGrid = new UniformGrid
+                    {
+                        Columns = Math.Min(cols, Math.Max(1, grp.Item2.Count)),
+                        HorizontalAlignment = HorizontalAlignment.Left
+                    };
+
+                    foreach (var entry in grp.Item2)
+                    {
+                        Border tileBorder = CreateItemTile(
+                            entry.Item1,
+                            entry.Item2,
+                            runningDisplayIdx,
+                            iconSize,
+                            tileW,
+                            tileH,
+                            marginHalf,
+                            pad,
+                            fontSize,
+                            labelMaxH);
+                        _displayedTiles.Add(new TileEntry
+                        {
+                            Item = entry.Item1,
+                            OriginalIndex = entry.Item2,
+                            TileBorder = tileBorder
+                        });
+                        secGrid.Children.Add(tileBorder);
+                        runningDisplayIdx++;
+                    }
+                    _contentHostStack.Children.Add(secGrid);
+                }
+            }
+            else
+            {
+                _itemsGrid.Columns = Math.Min(cols, Math.Max(1, matching.Count));
+                _contentHostStack.Children.Add(_itemsGrid);
+
+                for (int displayIdx = 0; displayIdx < matching.Count; displayIdx++)
+                {
+                    BinItem item = matching[displayIdx].Item1;
+                    int originalIndex = matching[displayIdx].Item2;
+                    Border tileBorder = CreateItemTile(
+                        item,
+                        originalIndex,
+                        displayIdx,
+                        iconSize,
+                        tileW,
+                        tileH,
+                        marginHalf,
+                        pad,
+                        fontSize,
+                        labelMaxH);
+
+                    _displayedTiles.Add(new TileEntry
+                    {
+                        Item = item,
+                        OriginalIndex = originalIndex,
+                        TileBorder = tileBorder
+                    });
+                    _itemsGrid.Children.Add(tileBorder);
+                }
             }
 
             ApplySelectionVisuals();
+            _contentHostStack.InvalidateMeasure();
+            _gridScroll.InvalidateMeasure();
         }
 
         private void ApplySelectionVisuals()
         {
+            Brush binAccent = FluentTheme.GetEffectiveAccentBrush(_currentBin?.AccentColorHex);
             for (int i = 0; i < _displayedTiles.Count; i++)
             {
                 Border b = _displayedTiles[i].TileBorder;
                 bool selected = (i == _selectedTileIndex);
                 b.Background = selected ? FluentTheme.CardSelectedBg : Brushes.Transparent;
-                b.BorderBrush = selected ? FluentTheme.AccentBrush : Brushes.Transparent;
+                b.BorderBrush = selected ? binAccent : Brushes.Transparent;
             }
         }
 
@@ -744,6 +969,7 @@ namespace WinBins.Views
             double fontSize,
             double labelMaxH)
         {
+            Brush binAccent = FluentTheme.GetEffectiveAccentBrush(_currentBin?.AccentColorHex);
             List<RunningWindowEntry> runningWindows = _runningAppsManager?.GetRunningWindowsForItem(item) ?? new List<RunningWindowEntry>();
             bool isRunning = runningWindows.Count > 0;
             bool wasActiveApp = isRunning && runningWindows.Any(w => w.Hwnd == _priorForegroundHwnd && !w.IsMinimized);
@@ -751,14 +977,28 @@ namespace WinBins.Views
             string targetExpanded = Environment.ExpandEnvironmentVariables((item.TargetPath ?? string.Empty).Trim());
             bool isFolder = item.Kind == BinItemKind.Folder || (!string.IsNullOrEmpty(targetExpanded) && Directory.Exists(targetExpanded));
             bool isWebUrl = item.Kind == BinItemKind.WebUrl || BinItem.IsWebUrl(targetExpanded);
+            bool isSystemCmd = item.Kind == BinItemKind.SystemCommand || BinItem.IsSystemCommand(targetExpanded);
+            bool isRecycleBin = isSystemCmd && string.Equals(BinItem.GetSystemActionKey(targetExpanded), "recyclebin", StringComparison.OrdinalIgnoreCase);
 
             double innerVPad = Math.Max(3, 4 + pad * 0.35);
             string keyHint = displayIdx < 9 ? $" [{displayIdx + 1}]" : string.Empty;
-            string tooltipText = isRunning
-                ? (runningWindows.Count == 1
+            string tooltipText;
+            if (isRecycleBin && Win32Interop.TryGetRecycleBinStatus(out long rbCount, out long rbBytes))
+            {
+                tooltipText = rbCount > 0
+                    ? $"{item.Name}{keyHint} ({rbCount} items • {LauncherService.FormatByteSize(rbBytes)})"
+                    : $"{item.Name}{keyHint} (Empty)";
+            }
+            else if (isRunning)
+            {
+                tooltipText = runningWindows.Count == 1
                     ? $"{item.Name}{keyHint} (Running)"
-                    : $"{item.Name}{keyHint} ({runningWindows.Count} windows open)")
-                : $"{item.Name}{keyHint}";
+                    : $"{item.Name}{keyHint} ({runningWindows.Count} windows open)";
+            }
+            else
+            {
+                tooltipText = $"{item.Name}{keyHint}";
+            }
 
             var tile = new Border
             {
@@ -784,16 +1024,49 @@ namespace WinBins.Views
                 Margin = new Thickness(4, innerVPad, 4, Math.Max(4, innerVPad))
             };
 
+            var iconWrap = new Grid
+            {
+                Width = iconSize,
+                Height = iconSize,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 0, 0, Math.Max(3, 4 + pad * 0.2))
+            };
+
             var iconImg = new Image
             {
                 Width = iconSize,
                 Height = iconSize,
-                Source = _iconService.GetItemImageSource(item),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 0, 0, Math.Max(3, 4 + pad * 0.2))
+                Source = _iconService.GetItemImageSource(item)
             };
             RenderOptions.SetBitmapScalingMode(iconImg, BitmapScalingMode.HighQuality);
-            stack.Children.Add(iconImg);
+            iconWrap.Children.Add(iconImg);
+
+            if (item.RunAsAdmin)
+            {
+                iconWrap.Children.Add(new Border
+                {
+                    Width = 14,
+                    Height = 14,
+                    CornerRadius = new CornerRadius(7),
+                    Background = FluentTheme.FlyoutBg,
+                    BorderBrush = FluentTheme.SubtleBorder,
+                    BorderThickness = new Thickness(1),
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Bottom,
+                    Margin = new Thickness(0, 0, -2, -2),
+                    Child = new TextBlock
+                    {
+                        Text = "\uEA18",
+                        FontFamily = FluentTheme.IconFont,
+                        FontSize = 8.5,
+                        Foreground = binAccent,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                });
+            }
+
+            stack.Children.Add(iconWrap);
 
             var label = new TextBlock
             {
@@ -811,13 +1084,14 @@ namespace WinBins.Views
 
             if (isRunning)
             {
-                // Subtle Windows 11 taskbar running pill indicator anchored at the bottom edge
+                // Windows 11 taskbar running pill indicator anchored at the bottom edge
                 var runningPill = new Border
                 {
-                    Width = wasActiveApp ? 16 : 8,
-                    Height = 3,
-                    CornerRadius = new CornerRadius(1.5),
-                    Background = wasActiveApp ? FluentTheme.AccentBrush : FluentTheme.TextMuted,
+                    Width = (wasActiveApp || runningWindows.Count > 1) ? 16 : 8,
+                    Height = 3.2,
+                    CornerRadius = new CornerRadius(1.6),
+                    Background = binAccent,
+                    Opacity = wasActiveApp ? 1.0 : 0.78,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Bottom,
                     Margin = new Thickness(0, 0, 0, 2),
@@ -881,7 +1155,7 @@ namespace WinBins.Views
             {
                 bool selected = (_selectedTileIndex == displayIdx);
                 tile.Background = selected ? FluentTheme.CardSelectedBg : Brushes.Transparent;
-                tile.BorderBrush = selected ? FluentTheme.AccentBrush : Brushes.Transparent;
+                tile.BorderBrush = selected ? binAccent : Brushes.Transparent;
                 if (peekBtn != null)
                     peekBtn.Opacity = 0;
             };
@@ -914,8 +1188,27 @@ namespace WinBins.Views
                         _suppressDeactivateClose = true;
                         try
                         {
-                            var data = new DataObject(InternalTileDragFormat, originalIndex);
-                            DragDrop.DoDragDrop(tile, data, DragDropEffects.Move);
+                            var data = new DataObject();
+                            DragDropEffects effects = DragDropEffects.None;
+
+                            if (!item.IsLiveFolderItem && originalIndex >= 0)
+                            {
+                                data.SetData(InternalTileDragFormat, originalIndex);
+                                effects |= DragDropEffects.Move;
+                            }
+
+                            if (!isWebUrl && !isSystemCmd &&
+                                !string.IsNullOrWhiteSpace(targetExpanded) &&
+                                (File.Exists(targetExpanded) || Directory.Exists(targetExpanded)))
+                            {
+                                data.SetData(DataFormats.FileDrop, new[] { targetExpanded });
+                                effects |= DragDropEffects.Copy | DragDropEffects.Move;
+                            }
+
+                            if (effects != DragDropEffects.None)
+                            {
+                                DragDrop.DoDragDrop(tile, data, effects);
+                            }
                         }
                         finally
                         {
@@ -970,10 +1263,10 @@ namespace WinBins.Views
                 if (e.Data.GetDataPresent(InternalTileDragFormat))
                 {
                     int fromIdx = (int)e.Data.GetData(InternalTileDragFormat);
-                    if (fromIdx != originalIndex)
+                    if (originalIndex >= 0 && fromIdx != originalIndex)
                     {
                         e.Effects = DragDropEffects.Move;
-                        tile.BorderBrush = FluentTheme.AccentBrush;
+                        tile.BorderBrush = binAccent;
                         tile.Background = FluentTheme.CardSelectedBg;
                         ShowDropHint($"Move to position {originalIndex + 1}", highlightOuterBorder: false);
                     }
@@ -990,11 +1283,22 @@ namespace WinBins.Views
                     e.Data.GetData(DataFormats.FileDrop) is string[] droppedFiles &&
                     droppedFiles.Length > 0)
                 {
+                    if (isRecycleBin)
+                    {
+                        e.Effects = DragDropEffects.Move;
+                        tile.BorderBrush = FluentTheme.DangerBrush;
+                        tile.Background = FluentTheme.CardSelectedBg;
+                        string noun = droppedFiles.Length == 1 ? Path.GetFileName(droppedFiles[0]) : $"{droppedFiles.Length} items";
+                        ShowDropHint($"Move {noun} to Recycle Bin", highlightOuterBorder: false);
+                        e.Handled = true;
+                        return;
+                    }
+
                     if (isFolder)
                     {
                         bool ctrlHeld = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
                         e.Effects = ctrlHeld ? DragDropEffects.Copy : DragDropEffects.Move;
-                        tile.BorderBrush = FluentTheme.AccentBrush;
+                        tile.BorderBrush = binAccent;
                         tile.Background = FluentTheme.CardSelectedBg;
                         string verb = ctrlHeld ? "Copy" : "Move";
                         string noun = droppedFiles.Length == 1 ? Path.GetFileName(droppedFiles[0]) : $"{droppedFiles.Length} items";
@@ -1010,10 +1314,10 @@ namespace WinBins.Views
                         return ext == ".lnk" || ext == ".exe" || ext == ".appref-ms";
                     });
 
-                    if (!isWebUrl && !allShortcutsOrExes)
+                    if (!isWebUrl && !isSystemCmd && !allShortcutsOrExes)
                     {
                         e.Effects = DragDropEffects.Copy;
-                        tile.BorderBrush = FluentTheme.AccentBrush;
+                        tile.BorderBrush = binAccent;
                         tile.Background = FluentTheme.CardSelectedBg;
                         string noun = droppedFiles.Length == 1 ? Path.GetFileName(droppedFiles[0]) : $"{droppedFiles.Length} files";
                         ShowDropHint($"Open {noun} with {item.Name} (Alt = Add to Bin)", highlightOuterBorder: false);
@@ -1026,7 +1330,7 @@ namespace WinBins.Views
             tile.DragLeave += (s, e) =>
             {
                 bool selected = (_selectedTileIndex == displayIdx);
-                tile.BorderBrush = selected ? FluentTheme.AccentBrush : Brushes.Transparent;
+                tile.BorderBrush = selected ? binAccent : Brushes.Transparent;
                 tile.Background = selected ? FluentTheme.CardSelectedBg : Brushes.Transparent;
             };
 
@@ -1039,7 +1343,7 @@ namespace WinBins.Views
                 if (e.Data.GetDataPresent(InternalTileDragFormat))
                 {
                     int fromIdx = (int)e.Data.GetData(InternalTileDragFormat);
-                    if (fromIdx != originalIndex)
+                    if (originalIndex >= 0 && fromIdx != originalIndex)
                     {
                         MoveItem(fromIdx, originalIndex);
                     }
@@ -1052,6 +1356,19 @@ namespace WinBins.Views
                     e.Data.GetData(DataFormats.FileDrop) is string[] droppedFiles &&
                     droppedFiles.Length > 0)
                 {
+                    if (isRecycleBin)
+                    {
+                        Win32Interop.ShellSendFilesToRecycleBin(droppedFiles);
+                        if (_currentBin != null)
+                        {
+                            _currentBin.IconRevision++;
+                            RebuildContent();
+                            _onBinModified?.Invoke(_currentBin);
+                        }
+                        e.Handled = true;
+                        return;
+                    }
+
                     if (isFolder)
                     {
                         bool ctrlHeld = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
@@ -1067,7 +1384,7 @@ namespace WinBins.Views
                         return ext == ".lnk" || ext == ".exe" || ext == ".appref-ms";
                     });
 
-                    if (!isWebUrl && !allShortcutsOrExes)
+                    if (!isWebUrl && !isSystemCmd && !allShortcutsOrExes)
                     {
                         if (_configService.Current?.ClosePopupOnLaunch ?? true)
                         {
@@ -1090,9 +1407,10 @@ namespace WinBins.Views
 
             bool ctrlHeld = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
             bool shiftHeld = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
-            bool keepOpen = shiftHeld || !(_configService.Current?.ClosePopupOnLaunch ?? true);
+            bool forceNewInstance = shiftHeld || ctrlHeld;
+            bool keepOpen = !(_configService.Current?.ClosePopupOnLaunch ?? true);
 
-            List<RunningWindowEntry> liveWindows = !ctrlHeld
+            List<RunningWindowEntry> liveWindows = !forceNewInstance
                 ? (_runningAppsManager?.GetRunningWindowsForItem(item) ?? new List<RunningWindowEntry>())
                 : null;
 
@@ -1103,6 +1421,13 @@ namespace WinBins.Views
 
             if (liveWindows != null && liveWindows.Count > 0)
             {
+                if (liveWindows.Count == 1 && liveWindows[0].Hwnd == _priorForegroundHwnd && !liveWindows[0].IsMinimized)
+                {
+                    Win32Interop.MinimizeWindow(liveWindows[0].Hwnd);
+                    _priorForegroundHwnd = IntPtr.Zero;
+                    return;
+                }
+
                 RunningWindowEntry targetWin = liveWindows[0];
                 if (liveWindows.Count > 1)
                 {
@@ -1299,6 +1624,68 @@ namespace WinBins.Views
             e.Handled = true;
         }
 
+        private MenuItem BuildSystemActionsSubmenu(Action<BinItem> onCreated)
+        {
+            var sysMenu = new MenuItem
+            {
+                Header = "System action",
+                Style = FluentTheme.CreateWin11MenuItemStyle(),
+                Icon = FluentTheme.CreateFluentIcon("\uE770", 13.5)
+            };
+
+            void AddSys(string label, string key, string glyph)
+            {
+                sysMenu.Items.Add(FluentTheme.CreateMenuItem(label, () =>
+                {
+                    onCreated?.Invoke(BinItem.FromSystemAction(key, label));
+                }, iconGlyph: glyph));
+            }
+
+            AddSys("Recycle Bin (Live)", "recyclebin", "\uE74D");
+            AddSys("Screen Snip", "snip", "\uE7A6");
+            AddSys("Task Manager", "taskmgr", "\uE9D9");
+            AddSys("Windows Settings", "settings", "\uE713");
+            sysMenu.Items.Add(FluentTheme.CreateMenuSeparator());
+            AddSys("Lock PC", "lock", "\uE72E");
+            AddSys("Sleep", "sleep", "\uE708");
+            AddSys("Restart PC", "restart", "\uE777");
+            AddSys("Shut Down", "shutdown", "\uE7E8");
+            sysMenu.Items.Add(FluentTheme.CreateMenuSeparator());
+            sysMenu.Items.Add(FluentTheme.CreateMenuItem("PowerShell Command...", () =>
+            {
+                AddCustomPowerShellItem();
+            }, iconGlyph: "\uE756"));
+
+            return sysMenu;
+        }
+
+        private void AddCustomPowerShellItem()
+        {
+            if (_currentBin == null)
+                return;
+
+            _suppressDeactivateClose = true;
+            try
+            {
+                BinItem draft = BinItem.FromSystemAction("powershell", "PowerShell Command", "");
+                var existingSections = _currentBin.Items?.Select(i => i?.Section).Where(s => !string.IsNullOrWhiteSpace(s));
+                var dlg = new ItemPropertiesDialogWindow(draft, existingSections) { Owner = this };
+                if (dlg.ShowDialog() == true)
+                {
+                    _currentBin.Items.Add(draft);
+                    _currentBin.IconRevision++;
+                    _configService.Save(notify: false);
+                    RebuildContent();
+                    _onBinModified?.Invoke(_currentBin);
+                }
+            }
+            finally
+            {
+                _suppressDeactivateClose = false;
+                if (IsVisible) Activate();
+            }
+        }
+
         private void OpenHeaderContextMenu(FrameworkElement anchor)
         {
             if (_currentBin == null)
@@ -1308,10 +1695,34 @@ namespace WinBins.Views
             menu.PlacementTarget = anchor;
             menu.Placement = PlacementMode.MousePoint;
 
+            int wsCount = (_currentBin.Items ?? new List<BinItem>())
+                .Count(it => it != null && it.IncludeInOpenAll && !BinItem.IsSystemCommand(it.TargetPath));
+            if (wsCount > 0)
+            {
+                menu.Items.Add(FluentTheme.CreateMenuItem($"Open workspace ({wsCount} items)", () =>
+                {
+                    BinGroup target = _currentBin;
+                    HidePopup();
+                    _ = LauncherService.LaunchBinWorkspaceAsync(target, _runningAppsManager);
+                }, iconGlyph: "\uE8A7"));
+                menu.Items.Add(FluentTheme.CreateMenuSeparator());
+            }
+
             menu.Items.Add(FluentTheme.CreateMenuItem("Add Installed / Store App...", AddFromStartMenu, iconGlyph: "\uE737"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Add App or Shortcut...", AddFilesViaDialog, iconGlyph: "\uE7C3"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Add Folder...", AddFolderViaDialog, iconGlyph: "\uE8B7"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Add Website / URL...", AddUrlViaDialog, iconGlyph: "\uE774"));
+            menu.Items.Add(BuildSystemActionsSubmenu(sysItem =>
+            {
+                if (_currentBin != null && sysItem != null)
+                {
+                    _currentBin.Items.Add(sysItem);
+                    _currentBin.IconRevision++;
+                    _configService.Save(notify: false);
+                    RebuildContent();
+                    _onBinModified?.Invoke(_currentBin);
+                }
+            }));
             menu.Items.Add(FluentTheme.CreateMenuSeparator());
 
             menu.Items.Add(FluentTheme.CreateMenuItem("Set flyout icon...", () =>
@@ -1382,6 +1793,66 @@ namespace WinBins.Views
 
             bool isUrl = item.Kind == BinItemKind.WebUrl || BinItem.IsWebUrl(item.TargetPath);
             bool isPackaged = item.Kind == BinItemKind.PackagedApp || BinItem.IsPackagedApp(item.TargetPath);
+            bool isSystemCmd = item.Kind == BinItemKind.SystemCommand || BinItem.IsSystemCommand(item.TargetPath);
+            bool isRecycleBin = isSystemCmd && string.Equals(BinItem.GetSystemActionKey(item.TargetPath), "recyclebin", StringComparison.OrdinalIgnoreCase);
+
+            if (item.IsLiveFolderItem)
+            {
+                if (!string.IsNullOrWhiteSpace(folderPathForPeek) && Directory.Exists(folderPathForPeek))
+                {
+                    var peekSubMenu = new MenuItem
+                    {
+                        Header = "Peek folder",
+                        Style = FluentTheme.CreateWin11MenuItemStyle(),
+                        Icon = FluentTheme.CreateFluentIcon("\uE8B7", 13.5, FluentTheme.TextSecondary)
+                    };
+                    peekSubMenu.Items.Add(new MenuItem { Header = "Loading..." });
+                    bool populated = false;
+                    peekSubMenu.SubmenuOpened += (_, __) =>
+                    {
+                        if (!populated)
+                        {
+                            populated = true;
+                            PopulateFolderPeekMenu(peekSubMenu, folderPathForPeek, _iconService, () => HidePopup(), depth: 0);
+                        }
+                    };
+                    menu.Items.Add(peekSubMenu);
+                }
+
+                menu.Items.Add(FluentTheme.CreateMenuItem("Open", () =>
+                {
+                    HidePopup();
+                    LauncherService.LaunchItem(item);
+                }, iconGlyph: "\uE8A7"));
+
+                menu.Items.Add(FluentTheme.CreateMenuItem("Open file location", () =>
+                {
+                    HidePopup();
+                    LauncherService.OpenItemLocation(item);
+                }, iconGlyph: "\uE8B7"));
+
+                menu.Items.Add(FluentTheme.CreateMenuSeparator());
+                menu.Items.Add(FluentTheme.CreateMenuItem("Pin permanently to Bin", () =>
+                {
+                    if (_currentBin != null && !string.IsNullOrWhiteSpace(item.TargetPath))
+                    {
+                        _currentBin.Items.Add(BinItem.FromPath(item.TargetPath));
+                        _currentBin.IconRevision++;
+                        _configService.Save(notify: false);
+                        RebuildContent();
+                        _onBinModified?.Invoke(_currentBin);
+                    }
+                }, iconGlyph: "\uE718"));
+
+                _suppressDeactivateClose = true;
+                menu.Closed += (_, __) =>
+                {
+                    _suppressDeactivateClose = false;
+                    if (IsVisible) Activate();
+                };
+                menu.IsOpen = true;
+                return;
+            }
 
             if (isUrl)
             {
@@ -1500,6 +1971,19 @@ namespace WinBins.Views
                         HidePopup();
                         LauncherService.LaunchItem(item);
                     }, iconGlyph: "\uE8A7"));
+
+                    string closeLabel = liveWindows.Count == 1 ? "Close window" : $"Close all {liveWindows.Count} windows";
+                    menu.Items.Add(FluentTheme.CreateMenuItem(closeLabel, () =>
+                    {
+                        foreach (RunningWindowEntry win in liveWindows)
+                        {
+                            Win32Interop.CloseWindowGracefully(win.Hwnd);
+                        }
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            if (IsVisible) RebuildContent();
+                        }), DispatcherPriority.Background);
+                    }, isDanger: true, iconGlyph: "\uE711"));
                 }
                 else
                 {
@@ -1510,7 +1994,34 @@ namespace WinBins.Views
                     }, iconGlyph: "\uE8A7"));
                 }
 
-                if (item.Kind != BinItemKind.Folder && !isPackaged)
+                if (isRecycleBin)
+                {
+                    Win32Interop.TryGetRecycleBinStatus(out long rbCount, out _);
+                    var emptyRbItem = FluentTheme.CreateMenuItem("Empty Recycle Bin", () =>
+                    {
+                        _suppressDeactivateClose = true;
+                        try
+                        {
+                            IntPtr hwnd = new WindowInteropHelper(this).Handle;
+                            Win32Interop.EmptyRecycleBin(hwnd, noConfirm: false);
+                            if (_currentBin != null)
+                            {
+                                _currentBin.IconRevision++;
+                                RebuildContent();
+                                _onBinModified?.Invoke(_currentBin);
+                            }
+                        }
+                        finally
+                        {
+                            _suppressDeactivateClose = false;
+                            if (IsVisible) Activate();
+                        }
+                    }, isDanger: rbCount > 0, iconGlyph: "\uE74D");
+                    emptyRbItem.IsEnabled = rbCount > 0;
+                    menu.Items.Add(emptyRbItem);
+                }
+
+                if (item.Kind != BinItemKind.Folder && !isPackaged && !isSystemCmd)
                 {
                     menu.Items.Add(FluentTheme.CreateMenuItem("Run as administrator", () =>
                     {
@@ -1519,7 +2030,7 @@ namespace WinBins.Views
                     }, iconGlyph: "\uE7EF"));
                 }
 
-                if (!isPackaged)
+                if (!isPackaged && !isSystemCmd)
                 {
                     menu.Items.Add(FluentTheme.CreateMenuItem("Open file location", () =>
                     {
@@ -1530,6 +2041,86 @@ namespace WinBins.Views
             }
 
             menu.Items.Add(FluentTheme.CreateMenuSeparator());
+
+            menu.Items.Add(FluentTheme.CreateMenuItem("Properties...", () =>
+            {
+                _suppressDeactivateClose = true;
+                try
+                {
+                    var existingSecs = _currentBin?.Items?.Select(i => i?.Section).Where(s => !string.IsNullOrWhiteSpace(s));
+                    var dlg = new ItemPropertiesDialogWindow(item, existingSecs) { Owner = this };
+                    if (dlg.ShowDialog() == true && _currentBin != null)
+                    {
+                        _currentBin.IconRevision++;
+                        _configService.Save(notify: false);
+                        RebuildContent();
+                        _onBinModified?.Invoke(_currentBin);
+                    }
+                }
+                finally
+                {
+                    _suppressDeactivateClose = false;
+                    if (IsVisible) Activate();
+                }
+            }, iconGlyph: "\uE946"));
+
+            // Category / Tab quick submenu
+            var catMenu = new MenuItem
+            {
+                Header = string.IsNullOrWhiteSpace(item.Section) ? "Set category / tab" : $"Category: {item.Section}",
+                Style = FluentTheme.CreateWin11MenuItemStyle(),
+                Icon = FluentTheme.CreateFluentIcon("\uE8EC", 13.5)
+            };
+            var existingCategories = (_currentBin?.Items ?? new List<BinItem>())
+                .Select(i => (i?.Section ?? string.Empty).Trim())
+                .Where(s => !string.IsNullOrEmpty(s))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            foreach (string cat in existingCategories)
+            {
+                string capturedCat = cat;
+                catMenu.Items.Add(FluentTheme.CreateMenuItem(capturedCat, () =>
+                {
+                    item.Section = capturedCat;
+                    _configService.Save(notify: false);
+                    RebuildContent();
+                    _onBinModified?.Invoke(_currentBin);
+                }, iconGlyph: string.Equals(item.Section, capturedCat, StringComparison.OrdinalIgnoreCase) ? "\uE73E" : null));
+            }
+            catMenu.Items.Add(FluentTheme.CreateMenuItem("New category / tab...", () =>
+            {
+                _suppressDeactivateClose = true;
+                try
+                {
+                    var dlg = new RenameDialogWindow("Category / Tab", "Enter a category or tab name for this item:", item.Section)
+                    {
+                        Owner = this
+                    };
+                    if (dlg.ShowDialog() == true && _currentBin != null)
+                    {
+                        item.Section = dlg.ResultText;
+                        _configService.Save(notify: false);
+                        RebuildContent();
+                        _onBinModified?.Invoke(_currentBin);
+                    }
+                }
+                finally
+                {
+                    _suppressDeactivateClose = false;
+                    if (IsVisible) Activate();
+                }
+            }, iconGlyph: "\uE710"));
+            if (!string.IsNullOrWhiteSpace(item.Section))
+            {
+                catMenu.Items.Add(FluentTheme.CreateMenuItem("Clear category", () =>
+                {
+                    item.Section = string.Empty;
+                    _configService.Save(notify: false);
+                    RebuildContent();
+                    _onBinModified?.Invoke(_currentBin);
+                }, iconGlyph: "\uE711"));
+            }
+            menu.Items.Add(catMenu);
 
             menu.Items.Add(FluentTheme.CreateMenuItem("Rename...", () =>
             {
@@ -1681,6 +2272,18 @@ namespace WinBins.Views
             menu.Items.Add(FluentTheme.CreateMenuItem("App or Shortcut...", AddFilesViaDialog, iconGlyph: "\uE7C3"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Folder...", AddFolderViaDialog, iconGlyph: "\uE8B7"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Website / URL...", AddUrlViaDialog, iconGlyph: "\uE774"));
+            menu.Items.Add(FluentTheme.CreateMenuSeparator());
+            menu.Items.Add(BuildSystemActionsSubmenu(sysItem =>
+            {
+                if (_currentBin != null && sysItem != null)
+                {
+                    _currentBin.Items.Add(sysItem);
+                    _currentBin.IconRevision++;
+                    _configService.Save(notify: false);
+                    RebuildContent();
+                    _onBinModified?.Invoke(_currentBin);
+                }
+            }));
 
             _suppressDeactivateClose = true;
             menu.Closed += (_, __) =>
@@ -1997,6 +2600,22 @@ namespace WinBins.Views
                 return;
             }
 
+            if (key == Key.Tab && _availableTabs.Count > 1 && string.IsNullOrEmpty(_filterText))
+            {
+                int curTabIdx = _availableTabs.FindIndex(t => string.Equals(t, _activeSectionTab, StringComparison.OrdinalIgnoreCase));
+                if (curTabIdx < 0) curTabIdx = 0;
+                bool reverse = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+                int nextTabIdx = reverse
+                    ? (curTabIdx - 1 + _availableTabs.Count) % _availableTabs.Count
+                    : (curTabIdx + 1) % _availableTabs.Count;
+                _activeSectionTab = _availableTabs[nextTabIdx];
+                _selectedTileIndex = -1;
+                RebuildContent();
+                UpdateLayout();
+                e.Handled = true;
+                return;
+            }
+
             if (key == Key.Back && !string.IsNullOrEmpty(_filterText))
             {
                 _filterText = _filterText.Substring(0, _filterText.Length - 1);
@@ -2137,8 +2756,22 @@ namespace WinBins.Views
 
             if (e.Data.GetDataPresent(DataFormats.FileDrop) || TryExtractDroppedWebUrl(e.Data, out _))
             {
-                e.Effects = DragDropEffects.Copy;
-                ShowDropHint("Drop here to add to Bin", highlightOuterBorder: true);
+                bool pureSmartFolder = _currentBin != null &&
+                                       (_currentBin.Items == null || _currentBin.Items.Count == 0) &&
+                                       !string.IsNullOrWhiteSpace(_currentBin.LiveFolderPath) &&
+                                       (Keyboard.Modifiers & ModifierKeys.Alt) == 0 &&
+                                       e.Data.GetDataPresent(DataFormats.FileDrop);
+                if (pureSmartFolder)
+                {
+                    bool ctrlHeld = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
+                    e.Effects = ctrlHeld ? DragDropEffects.Copy : DragDropEffects.Move;
+                    ShowDropHint($"{(ctrlHeld ? "Copy" : "Move")} into {_currentBin.Name} folder (Alt = Pin to Bin)", highlightOuterBorder: true);
+                }
+                else
+                {
+                    e.Effects = DragDropEffects.Copy;
+                    ShowDropHint("Drop here to add to Bin", highlightOuterBorder: true);
+                }
             }
             else
             {
@@ -2167,6 +2800,25 @@ namespace WinBins.Views
             {
                 if (e.Data.GetData(DataFormats.FileDrop) is string[] files && files.Length > 0)
                 {
+                    bool pureSmartFolder = _currentBin != null &&
+                                           (_currentBin.Items == null || _currentBin.Items.Count == 0) &&
+                                           !string.IsNullOrWhiteSpace(_currentBin.LiveFolderPath) &&
+                                           (Keyboard.Modifiers & ModifierKeys.Alt) == 0;
+                    if (pureSmartFolder)
+                    {
+                        string liveDir = Environment.ExpandEnvironmentVariables(_currentBin.LiveFolderPath.Trim());
+                        if (Directory.Exists(liveDir))
+                        {
+                            bool ctrlHeld = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
+                            Win32Interop.ShellCopyOrMoveFilesToFolder(files, liveDir, copy: ctrlHeld);
+                            _currentBin.IconRevision++;
+                            RebuildContent();
+                            _onBinModified?.Invoke(_currentBin);
+                            e.Handled = true;
+                            return;
+                        }
+                    }
+
                     AddPathsToCurrentBin(files);
                 }
             }

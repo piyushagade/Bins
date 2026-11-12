@@ -872,6 +872,57 @@ namespace WinBins.Views
             return mi;
         }
 
+        public static readonly Tuple<string, string>[] PresetBinAccents =
+        {
+            Tuple.Create("Default", string.Empty),
+            Tuple.Create("Blue", "#3B82F6"),
+            Tuple.Create("Cyan", "#06B6D4"),
+            Tuple.Create("Emerald", "#10B981"),
+            Tuple.Create("Amber", "#F59E0B"),
+            Tuple.Create("Rose", "#F43F5E"),
+            Tuple.Create("Purple", "#8B5CF6"),
+            Tuple.Create("Pink", "#EC4899")
+        };
+
+        public static Brush GetEffectiveAccentBrush(string accentColorHex)
+        {
+            if (string.IsNullOrWhiteSpace(accentColorHex))
+                return AccentBrush;
+
+            try
+            {
+                string clean = accentColorHex.Trim();
+                if (!clean.StartsWith("#", StringComparison.Ordinal))
+                    clean = "#" + clean;
+                return BrushFromHex(clean);
+            }
+            catch
+            {
+                return AccentBrush;
+            }
+        }
+
+        public static Brush GetTintedPillBgBrush(string accentColorHex, byte alpha = 42)
+        {
+            if (string.IsNullOrWhiteSpace(accentColorHex))
+                return SubtleHoverBg;
+
+            try
+            {
+                string clean = accentColorHex.Trim();
+                if (!clean.StartsWith("#", StringComparison.Ordinal))
+                    clean = "#" + clean;
+                var baseCol = (Color)ColorConverter.ConvertFromString(clean);
+                var brush = new SolidColorBrush(Color.FromArgb(alpha, baseCol.R, baseCol.G, baseCol.B));
+                brush.Freeze();
+                return brush;
+            }
+            catch
+            {
+                return SubtleHoverBg;
+            }
+        }
+
         public static Separator CreateMenuSeparator()
         {
             var sep = new Separator
