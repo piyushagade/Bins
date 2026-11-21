@@ -59,6 +59,8 @@ namespace WinBins.Services
             "WorkerW",
             "TaskListThumbnailWnd",
             "XamlExplorerHostIslandWindow",
+            "MultitaskingViewFrame",
+            "MSTaskSwWClass",
             "Windows.UI.Core.CoreWindow"
         };
 
@@ -71,16 +73,22 @@ namespace WinBins.Services
 
         private readonly HashSet<IntPtr> _hiddenHwnds = new HashSet<IntPtr>();
         private readonly Win32Interop.WinEventDelegate _winEventProc;
+        private readonly Win32Interop.LowLevelKeyboardProc _keyboardProc;
 
         private IntPtr _showHook = IntPtr.Zero;
         private IntPtr _foregroundHook = IntPtr.Zero;
         private IntPtr _minimizeEndHook = IntPtr.Zero;
+        private IntPtr _switchHook = IntPtr.Zero;
+        private IntPtr _keyboardHook = IntPtr.Zero;
 
         private Win32Interop.ITaskbarList _taskbarList;
         private IntPtr _lastShellTrayHwnd = IntPtr.Zero;
 
         private DispatcherTimer _debounceTimer;
         private DispatcherTimer _pollTimer;
+        private DispatcherTimer _switcherEndTimer;
+        private bool _switcherRestoreActive;
+        private int _switcherLastActivityTick;
         private bool _disposed;
 
         public RunningAppsTaskbarManager(ConfigService configService, Dispatcher dispatcher)
@@ -90,6 +98,7 @@ namespace WinBins.Services
             _currentPid = (uint)Process.GetCurrentProcess().Id;
 
             _winEventProc = OnWinEvent;
+            _keyboardProc = OnLowLevelKeyboard;
 
             _debounceTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
             {
@@ -101,6 +110,12 @@ namespace WinBins.Services
                 SyncRunningWindows();
             };
 
+            _switcherEndTimer = new DispatcherTimer(DispatcherPriority.Input, _dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(95)
+            };
+            _switcherEndTimer.Tick += OnSwitcherEndTimerTick;
+
             _pollTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
             {
                 Interval = TimeSpan.FromMilliseconds(1500)
@@ -109,6 +124,7 @@ namespace WinBins.Services
             _pollTimer.Start();
 
             InstallWinEventHooks();
+            _dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => SyncRunningWindows()));
         }
 
         private void InstallWinEventHooks()
@@ -142,10 +158,227 @@ namespace WinBins.Services
                     0,
                     0,
                     flags);
+
+                _switchHook = Win32Interop.SetWinEventHook(
+                    Win32Interop.EVENT_SYSTEM_SWITCHSTART,
+                    Win32Interop.EVENT_SYSTEM_SWITCHEND,
+                    IntPtr.Zero,
+                    _winEventProc,
+                    0,
+                    0,
+                    flags);
             }
             catch
             {
             }
+        }
+
+        private void EnsureKeyboardHookState(bool shouldBeInstalled)
+        {
+            if (_disposed)
+                return;
+
+            if (shouldBeInstalled)
+            {
+                if (_keyboardHook != IntPtr.Zero)
+                    return;
+
+                try
+                {
+                    IntPtr hMod = IntPtr.Zero;
+                    try { hMod = Process.GetCurrentProcess().MainModule?.BaseAddress ?? IntPtr.Zero; } catch { }
+                    _keyboardHook = Win32Interop.SetWindowsHookExW(Win32Interop.WH_KEYBOARD_LL, _keyboardProc, hMod, 0);
+                    if (_keyboardHook == IntPtr.Zero && hMod != IntPtr.Zero)
+                    {
+                        _keyboardHook = Win32Interop.SetWindowsHookExW(Win32Interop.WH_KEYBOARD_LL, _keyboardProc, IntPtr.Zero, 0);
+                    }
+                }
+                catch
+                {
+                }
+            }
+            else if (_keyboardHook != IntPtr.Zero)
+            {
+                try { Win32Interop.UnhookWindowsHookEx(_keyboardHook); } catch { }
+                _keyboardHook = IntPtr.Zero;
+            }
+        }
+
+        private static bool IsKeyDown(int vk)
+        {
+            return (Win32Interop.GetAsyncKeyState(vk) & 0x8000) != 0;
+        }
+
+        private static bool IsAltOrWinKeyDown()
+        {
+            return IsKeyDown(Win32Interop.VK_MENU) ||
+                   IsKeyDown(Win32Interop.VK_LMENU) ||
+                   IsKeyDown(Win32Interop.VK_RMENU) ||
+                   IsKeyDown(Win32Interop.VK_LWIN) ||
+                   IsKeyDown(Win32Interop.VK_RWIN);
+        }
+
+        private static bool IsTaskSwitcherWindow(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero || !Win32Interop.IsWindow(hwnd) || !Win32Interop.IsWindowVisible(hwnd))
+                return false;
+
+            string cls = Win32Interop.GetWindowClassNameSafe(hwnd);
+            if (string.IsNullOrEmpty(cls))
+                return false;
+
+            if (string.Equals(cls, "MultitaskingViewFrame", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cls, "MSTaskSwWClass", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // Windows 11 XAML Alt+Tab ("Task Switching"), Win+Tab ("Task View"), and Snap Assist use
+            // XamlExplorerHostIslandWindow with a non-empty title, whereas tray overflow flyouts have an empty title.
+            if (string.Equals(cls, "XamlExplorerHostIslandWindow", StringComparison.OrdinalIgnoreCase) &&
+                Win32Interop.GetWindowTextLengthW(hwnd) > 0)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private IntPtr OnLowLevelKeyboard(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (nCode >= Win32Interop.HC_ACTION && !_disposed && lParam != IntPtr.Zero)
+            {
+                try
+                {
+                    int msg = wParam.ToInt32();
+                    var kbd = Marshal.PtrToStructure<Win32Interop.KBDLLHOOKSTRUCT>(lParam);
+                    uint vk = kbd.vkCode;
+
+                    if (msg == Win32Interop.WM_KEYDOWN || msg == Win32Interop.WM_SYSKEYDOWN)
+                    {
+                        if (vk == Win32Interop.VK_TAB && _hiddenHwnds.Count > 0)
+                        {
+                            bool altDown = (kbd.flags & Win32Interop.LLKHF_ALTDOWN) != 0 ||
+                                           IsKeyDown(Win32Interop.VK_MENU) ||
+                                           IsKeyDown(Win32Interop.VK_LMENU) ||
+                                           IsKeyDown(Win32Interop.VK_RMENU);
+                            bool winDown = IsKeyDown(Win32Interop.VK_LWIN) || IsKeyDown(Win32Interop.VK_RWIN);
+
+                            if (altDown || winDown)
+                            {
+                                // Synchronously re-register hidden binned windows before Windows processes Tab
+                                // so XAML Alt+Tab / Win+Tab includes all open binned apps in proper MRU order.
+                                RestoreHiddenWindowsForSwitcher();
+                            }
+                        }
+                    }
+                    else if (msg == Win32Interop.WM_KEYUP || msg == Win32Interop.WM_SYSKEYUP)
+                    {
+                        if (_switcherRestoreActive &&
+                            (vk == Win32Interop.VK_MENU ||
+                             vk == Win32Interop.VK_LMENU ||
+                             vk == Win32Interop.VK_RMENU ||
+                             vk == Win32Interop.VK_LWIN ||
+                             vk == Win32Interop.VK_RWIN ||
+                             vk == Win32Interop.VK_ESCAPE ||
+                             vk == Win32Interop.VK_RETURN))
+                        {
+                            ScheduleSwitcherEndCheck();
+                        }
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            return Win32Interop.CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+        }
+
+        private void RestoreHiddenWindowsForSwitcher()
+        {
+            _switcherEndTimer.Stop();
+            _switcherLastActivityTick = Environment.TickCount;
+
+            if (_switcherRestoreActive || _hiddenHwnds.Count == 0)
+                return;
+
+            if (_taskbarList == null && !EnsureTaskbarListReady(out _))
+                return;
+
+            _switcherRestoreActive = true;
+
+            IntPtr fgBefore = Win32Interop.GetForegroundWindow();
+
+            // Walk top-to-bottom Win32 Z-order so we can call AddTab from bottom-to-top (oldest to newest),
+            // preserving natural MRU ordering inside Windows 11's XAML Alt+Tab switcher.
+            var orderedHidden = new List<IntPtr>(_hiddenHwnds.Count);
+            IntPtr cur = Win32Interop.GetTopWindow(IntPtr.Zero);
+            int guard = 0;
+            while (cur != IntPtr.Zero && guard++ < 16384)
+            {
+                if (_hiddenHwnds.Contains(cur))
+                {
+                    orderedHidden.Add(cur);
+                    if (orderedHidden.Count == _hiddenHwnds.Count)
+                        break;
+                }
+                cur = Win32Interop.GetWindow(cur, Win32Interop.GW_HWNDNEXT);
+            }
+
+            if (orderedHidden.Count < _hiddenHwnds.Count)
+            {
+                foreach (IntPtr remaining in _hiddenHwnds)
+                {
+                    if (!orderedHidden.Contains(remaining))
+                    {
+                        orderedHidden.Add(remaining);
+                    }
+                }
+            }
+
+            for (int i = orderedHidden.Count - 1; i >= 0; i--)
+            {
+                IntPtr h = orderedHidden[i];
+                if (Win32Interop.IsWindow(h) && Win32Interop.IsWindowVisible(h) && !Win32Interop.IsWindowCloaked(h))
+                {
+                    try { _taskbarList.AddTab(h); } catch { }
+                }
+            }
+
+            // Re-assert the current foreground window as active tab #0 so the first Alt+Tab press highlights #1.
+            if (fgBefore != IntPtr.Zero &&
+                Win32Interop.IsWindow(fgBefore) &&
+                !IsTaskSwitcherWindow(fgBefore))
+            {
+                try { _taskbarList.ActivateTab(fgBefore); } catch { }
+            }
+
+            // Start end-watcher so even gesture-triggered switchers automatically re-hide when dismissed.
+            _switcherEndTimer.Start();
+        }
+
+        private void ScheduleSwitcherEndCheck()
+        {
+            _switcherEndTimer.Stop();
+            _switcherEndTimer.Start();
+        }
+
+        private void OnSwitcherEndTimerTick(object sender, EventArgs e)
+        {
+            _switcherEndTimer.Stop();
+            if (_disposed || !_switcherRestoreActive)
+                return;
+
+            IntPtr fg = Win32Interop.GetForegroundWindow();
+            if (IsAltOrWinKeyDown() || IsTaskSwitcherWindow(fg))
+            {
+                _switcherEndTimer.Start();
+                return;
+            }
+
+            _switcherRestoreActive = false;
+            SyncRunningWindows(forceReassert: true);
         }
 
         private void OnWinEvent(
@@ -160,8 +393,41 @@ namespace WinBins.Services
             if (_disposed || hwnd == IntPtr.Zero)
                 return;
 
+            if (eventType == Win32Interop.EVENT_SYSTEM_SWITCHSTART)
+            {
+                if (_hiddenHwnds.Count > 0)
+                {
+                    RestoreHiddenWindowsForSwitcher();
+                }
+                return;
+            }
+
+            if (eventType == Win32Interop.EVENT_SYSTEM_SWITCHEND)
+            {
+                if (_switcherRestoreActive)
+                {
+                    ScheduleSwitcherEndCheck();
+                }
+                return;
+            }
+
             if (eventType == Win32Interop.EVENT_OBJECT_SHOW && idObject != Win32Interop.OBJID_WINDOW)
                 return;
+
+            if (eventType == Win32Interop.EVENT_SYSTEM_FOREGROUND || eventType == Win32Interop.EVENT_OBJECT_SHOW)
+            {
+                if (_hiddenHwnds.Count > 0 && IsTaskSwitcherWindow(hwnd))
+                {
+                    RestoreHiddenWindowsForSwitcher();
+                    return;
+                }
+
+                if (_switcherRestoreActive && eventType == Win32Interop.EVENT_SYSTEM_FOREGROUND)
+                {
+                    ScheduleSwitcherEndCheck();
+                    return;
+                }
+            }
 
             if (!_debounceTimer.IsEnabled)
             {
@@ -224,8 +490,31 @@ namespace WinBins.Services
                 }
 
                 bool hasAnyActiveTargets = targetFullPaths.Count > 0 || targetFileNames.Count > 0 || hideExplorerWindows;
+                EnsureKeyboardHookState(hasAnyActiveTargets);
+
                 if (!hasAnyActiveTargets && _hiddenHwnds.Count == 0)
                     return;
+
+                // While Alt+Tab / Win+Tab / Snap Assist is active, keep binned windows visible in the switcher.
+                if (_switcherRestoreActive)
+                {
+                    if (!hasAnyActiveTargets)
+                    {
+                        _switcherRestoreActive = false;
+                        _switcherEndTimer.Stop();
+                    }
+                    else if (IsAltOrWinKeyDown() ||
+                             IsTaskSwitcherWindow(Win32Interop.GetForegroundWindow()) ||
+                             Math.Abs(Environment.TickCount - _switcherLastActivityTick) < 260)
+                    {
+                        return;
+                    }
+                    else
+                    {
+                        _switcherRestoreActive = false;
+                        forceReassert = true;
+                    }
+                }
 
                 if (!EnsureTaskbarListReady(out bool explorerRestarted))
                     return;
@@ -609,6 +898,9 @@ namespace WinBins.Services
 
         public void RestoreAllHiddenWindows()
         {
+            _switcherRestoreActive = false;
+            try { _switcherEndTimer?.Stop(); } catch { }
+
             if (_hiddenHwnds.Count == 0)
                 return;
 
@@ -637,6 +929,13 @@ namespace WinBins.Services
 
             try { _debounceTimer?.Stop(); } catch { }
             try { _pollTimer?.Stop(); } catch { }
+            try { _switcherEndTimer?.Stop(); } catch { }
+
+            if (_keyboardHook != IntPtr.Zero)
+            {
+                try { Win32Interop.UnhookWindowsHookEx(_keyboardHook); } catch { }
+                _keyboardHook = IntPtr.Zero;
+            }
 
             if (_showHook != IntPtr.Zero)
             {
@@ -652,6 +951,11 @@ namespace WinBins.Services
             {
                 Win32Interop.UnhookWinEvent(_minimizeEndHook);
                 _minimizeEndHook = IntPtr.Zero;
+            }
+            if (_switchHook != IntPtr.Zero)
+            {
+                Win32Interop.UnhookWinEvent(_switchHook);
+                _switchHook = IntPtr.Zero;
             }
 
             RestoreAllHiddenWindows();

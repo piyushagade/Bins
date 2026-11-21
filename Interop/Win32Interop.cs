@@ -31,6 +31,22 @@ namespace WinBins.Interop
         public const uint MOD_NOREPEAT = 0x4000;
 
         public const int VK_LBUTTON = 0x01;
+        public const int VK_TAB = 0x09;
+        public const int VK_RETURN = 0x0D;
+        public const int VK_MENU = 0x12;
+        public const int VK_ESCAPE = 0x1B;
+        public const int VK_LWIN = 0x5B;
+        public const int VK_RWIN = 0x5C;
+        public const int VK_LMENU = 0xA4;
+        public const int VK_RMENU = 0xA5;
+
+        public const int WH_KEYBOARD_LL = 13;
+        public const int HC_ACTION = 0;
+        public const int WM_KEYDOWN = 0x0100;
+        public const int WM_KEYUP = 0x0101;
+        public const int WM_SYSKEYDOWN = 0x0104;
+        public const int WM_SYSKEYUP = 0x0105;
+        public const uint LLKHF_ALTDOWN = 0x0020;
 
         public const uint FO_MOVE = 0x0001;
         public const uint FO_COPY = 0x0002;
@@ -73,6 +89,7 @@ namespace WinBins.Interop
 
         public const int GWL_STYLE = -16;
         public const int GWL_EXSTYLE = -20;
+        public const uint GW_HWNDNEXT = 2;
         public const uint GW_OWNER = 4;
         public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
@@ -90,6 +107,8 @@ namespace WinBins.Interop
         public const int DWMWA_SYSTEMBACKDROP_TYPE = 38;
 
         public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+        public const uint EVENT_SYSTEM_SWITCHSTART = 0x0014;
+        public const uint EVENT_SYSTEM_SWITCHEND = 0x0015;
         public const uint EVENT_SYSTEM_MINIMIZEEND = 0x0017;
         public const uint EVENT_OBJECT_SHOW = 0x8002;
         public const uint WINEVENT_OUTOFCONTEXT = 0x0000;
@@ -138,6 +157,18 @@ namespace WinBins.Interop
             int idChild,
             uint dwEventThread,
             uint dwmsEventTime);
+
+        public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct KBDLLHOOKSTRUCT
+        {
+            public uint vkCode;
+            public uint scanCode;
+            public uint flags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
 
         [StructLayout(LayoutKind.Sequential)]
         public struct MSG
@@ -579,6 +610,9 @@ namespace WinBins.Interop
         [DllImport("user32.dll")]
         public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
 
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetTopWindow(IntPtr hWnd);
+
         [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
         public static extern IntPtr GetWindowLongPtrW(IntPtr hWnd, int nIndex);
 
@@ -603,6 +637,19 @@ namespace WinBins.Interop
 
         [DllImport("user32.dll")]
         public static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr SetWindowsHookExW(
+            int idHook,
+            LowLevelKeyboardProc lpfn,
+            IntPtr hMod,
+            uint dwThreadId);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
 
         [DllImport("user32.dll")]
         public static extern bool SetForegroundWindow(IntPtr hWnd);
