@@ -585,33 +585,50 @@ namespace WinBins.Views
             }
         }
 
-        private void GetDensityMetrics(out double iconSize, out double baseTileW, out double baseTileH, out double fontSize, out double labelMaxH)
+        private void GetDensityMetrics(
+            out double iconSize,
+            out double baseTileW,
+            out double baseTileH,
+            out double fontSize,
+            out double lineHeight,
+            out double labelMaxH,
+            out double baseIconTopPad,
+            out double baseIconLabelGap)
         {
             BinFlyoutDensity density = _currentBin?.Density ?? BinFlyoutDensity.Normal;
             switch (density)
             {
                 case BinFlyoutDensity.Compact:
                     iconSize = 28;
-                    baseTileW = 62;
-                    baseTileH = 64;
+                    baseTileW = 64;
+                    baseTileH = 74;
                     fontSize = 10.5;
-                    labelMaxH = 28;
+                    lineHeight = 13.5;
+                    labelMaxH = 27.0;
+                    baseIconTopPad = 6.0;
+                    baseIconLabelGap = 4.0;
                     break;
 
                 case BinFlyoutDensity.Spacious:
                     iconSize = 44;
                     baseTileW = 94;
-                    baseTileH = 98;
+                    baseTileH = 102;
                     fontSize = 12.0;
-                    labelMaxH = 34;
+                    lineHeight = 16.0;
+                    labelMaxH = 32.0;
+                    baseIconTopPad = 9.0;
+                    baseIconLabelGap = 6.0;
                     break;
 
                 default:
                     iconSize = 36;
                     baseTileW = 78;
-                    baseTileH = 82;
+                    baseTileH = 90;
                     fontSize = 11.5;
-                    labelMaxH = 32;
+                    lineHeight = 15.5;
+                    labelMaxH = 31.0;
+                    baseIconTopPad = 8.0;
+                    baseIconLabelGap = 5.0;
                     break;
             }
         }
@@ -830,9 +847,19 @@ namespace WinBins.Views
             }
 
             int cols = Math.Max(1, Math.Min(10, _currentBin.Columns));
-            GetDensityMetrics(out double iconSize, out double baseTileW, out double baseTileH, out double fontSize, out double labelMaxH);
+            GetDensityMetrics(
+                out double iconSize,
+                out double baseTileW,
+                out double baseTileH,
+                out double fontSize,
+                out double lineHeight,
+                out double labelMaxH,
+                out double baseIconTopPad,
+                out double baseIconLabelGap);
             double tileW = baseTileW + pad * 1.2;
             double tileH = baseTileH + pad * 1.2;
+            double iconTopPad = Math.Round(baseIconTopPad + pad * 0.35, 1);
+            double iconLabelGap = Math.Round(baseIconLabelGap + pad * 0.15, 1);
             double marginHalf = Math.Round(pad / 2.0, 1);
             double fullRowHeight = tileH + marginHalf * 2.0;
 
@@ -896,7 +923,10 @@ namespace WinBins.Views
                             marginHalf,
                             pad,
                             fontSize,
-                            labelMaxH);
+                            lineHeight,
+                            labelMaxH,
+                            iconTopPad,
+                            iconLabelGap);
                         _displayedTiles.Add(new TileEntry
                         {
                             Item = entry.Item1,
@@ -928,7 +958,10 @@ namespace WinBins.Views
                         marginHalf,
                         pad,
                         fontSize,
-                        labelMaxH);
+                        lineHeight,
+                        labelMaxH,
+                        iconTopPad,
+                        iconLabelGap);
 
                     _displayedTiles.Add(new TileEntry
                     {
@@ -967,7 +1000,10 @@ namespace WinBins.Views
             double marginHalf,
             int pad,
             double fontSize,
-            double labelMaxH)
+            double lineHeight,
+            double labelMaxH,
+            double iconTopPad,
+            double iconLabelGap)
         {
             Brush binAccent = FluentTheme.GetEffectiveAccentBrush(_currentBin?.AccentColorHex);
             List<RunningWindowEntry> runningWindows = _runningAppsManager?.GetRunningWindowsForItem(item) ?? new List<RunningWindowEntry>();
@@ -980,7 +1016,7 @@ namespace WinBins.Views
             bool isSystemCmd = item.Kind == BinItemKind.SystemCommand || BinItem.IsSystemCommand(targetExpanded);
             bool isRecycleBin = isSystemCmd && string.Equals(BinItem.GetSystemActionKey(targetExpanded), "recyclebin", StringComparison.OrdinalIgnoreCase);
 
-            double innerVPad = Math.Max(3, 4 + pad * 0.35);
+            double bottomPad = Math.Round(7.0 + pad * 0.2, 1);
             string keyHint = displayIdx < 9 ? $" [{displayIdx + 1}]" : string.Empty;
             string tooltipText;
             if (isRecycleBin && Win32Interop.TryGetRecycleBinStatus(out long rbCount, out long rbBytes))
@@ -1017,19 +1053,23 @@ namespace WinBins.Views
 
             var tileOverlayGrid = new Grid();
 
-            var stack = new StackPanel
+            // Fixed top-anchored 2-row layout so every icon in a row sits on the exact same horizontal line
+            // and 2-line wrapped labels never push or clip icons upward.
+            var contentGrid = new Grid
             {
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(4, innerVPad, 4, Math.Max(4, innerVPad))
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                Margin = new Thickness(4, iconTopPad, 4, bottomPad)
             };
+            contentGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(iconSize + iconLabelGap, GridUnitType.Pixel) });
+            contentGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
             var iconWrap = new Grid
             {
                 Width = iconSize,
                 Height = iconSize,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 0, 0, Math.Max(3, 4 + pad * 0.2))
+                VerticalAlignment = VerticalAlignment.Top
             };
 
             var iconImg = new Image
@@ -1066,21 +1106,27 @@ namespace WinBins.Views
                 });
             }
 
-            stack.Children.Add(iconWrap);
+            Grid.SetRow(iconWrap, 0);
+            contentGrid.Children.Add(iconWrap);
 
             var label = new TextBlock
             {
                 Text = item.Name,
                 Width = Math.Max(44, tileW - 10),
                 FontSize = fontSize,
+                LineHeight = lineHeight,
+                LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
                 Foreground = FluentTheme.TextPrimary,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
                 TextAlignment = TextAlignment.Center,
                 TextWrapping = TextWrapping.Wrap,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 MaxHeight = labelMaxH
             };
-            stack.Children.Add(label);
-            tileOverlayGrid.Children.Add(stack);
+            Grid.SetRow(label, 1);
+            contentGrid.Children.Add(label);
+            tileOverlayGrid.Children.Add(contentGrid);
 
             if (isRunning)
             {
