@@ -1128,11 +1128,11 @@ namespace WinBins.Views
             appearanceRows.Children.Add(CreateSettingsRowDivider());
 
             _hideRunningAppsBinToggle = FluentTheme.CreateToggleCheckBox(null, false);
-            _hideRunningAppsBinToggle.ToolTip = "Hide duplicate taskbar icons when apps in this Bin are open";
+            _hideRunningAppsBinToggle.ToolTip = "Prevent apps in this Bin from appearing separately on the taskbar when opened";
             _hideRunningAppsBinToggle.Checked += HideRunningAppsBin_Changed;
             _hideRunningAppsBinToggle.Unchecked += HideRunningAppsBin_Changed;
-            var hideOpenRow = CreateFlyoutSettingRow("Hide open app icons", _hideRunningAppsBinToggle);
-            hideOpenRow.ToolTip = "Prevent running apps in this Bin from showing a second standalone icon on the taskbar";
+            var hideOpenRow = CreateFlyoutSettingRow("Keep open apps in Bin", _hideRunningAppsBinToggle);
+            hideOpenRow.ToolTip = "Prevent apps in this Bin from appearing separately on the taskbar when opened";
             appearanceRows.Children.Add(hideOpenRow);
             appearanceRows.Children.Add(CreateSettingsRowDivider());
 
@@ -1679,8 +1679,8 @@ namespace WinBins.Views
             _hideRunningAppsGlobalToggle.Unchecked += GlobalSetting_Changed;
             panel.Children.Add(CreateSettingsCard(
                 "\uECAA",
-                "Hide duplicate taskbar icons",
-                "Hide standalone taskbar icons when apps inside a taskbar Bin are open",
+                "Keep open apps inside their Bin",
+                "Prevent apps in a Bin from appearing separately on the taskbar when opened",
                 _hideRunningAppsGlobalToggle));
 
             _minimizeToTrayToggle = FluentTheme.CreateToggleCheckBox(null, true);
@@ -2715,8 +2715,8 @@ namespace WinBins.Views
             }
 
             string hideToggleLabel = bin.HideRunningAppsOnTaskbar
-                ? "Show open app icons on taskbar"
-                : "Hide open app icons on taskbar";
+                ? "Show open apps separately on taskbar"
+                : "Keep open apps inside Bin";
             menu.Items.Add(FluentTheme.CreateMenuItem(hideToggleLabel, () =>
             {
                 bin.HideRunningAppsOnTaskbar = !bin.HideRunningAppsOnTaskbar;

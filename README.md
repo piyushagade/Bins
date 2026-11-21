@@ -1,6 +1,6 @@
 # Bins for Windows 11
 
-A native Windows 11 grouped taskbar icon launcher (**v1.4.1**), built with C#, WPF (WinUI 3 Dark / Light / System Fluent styling), and Win32 Shell / DWM COM Interop.
+A native Windows 11 grouped taskbar icon launcher (**v1.4.2**), built with C#, WPF (WinUI 3 Dark / Light / System Fluent styling), and Win32 Shell / DWM COM Interop.
 
 ## Features
 
@@ -34,7 +34,7 @@ A native Windows 11 grouped taskbar icon launcher (**v1.4.1**), built with C#, W
 
 6. **Windows 11 Taskbar Integration, Smart Workspaces, Themes, Backup & Cloud Sync**:
    - **Taskbar Pinning & Native Jump Lists**: Pin any Bin on the Windows 11 Taskbar (`System.AppUserModel.ID` + `ICustomDestinationList`) for right-click Jump List access to items, staggered **Open workspace**, `Edit`, and `Bins settings`
-   - **Hide Duplicate Taskbar Icons**: Optional per-Bin and global toggles hide standalone taskbar buttons for open binned apps (`ITaskbarList`)
+   - **Keep Open Apps Inside Their Bin**: Optional per-Bin and global toggles prevent open binned apps from appearing separately on the taskbar (`ITaskbarList`)
    - **Acrylic Blur & Light / Dark / System Theme**: Native Windows 11 DWM Acrylic backdrop blur (`DWMSBT_TRANSIENTWINDOW`) and `Dark` / `Light` / `System` color themes
    - **Portable `.bins` Backup, Cloud Sync & Update Checker**: One-click `.bins` archive export/import, custom OneDrive / Dropbox sync folder support, and GitHub release update checking
 
