@@ -623,6 +623,7 @@ namespace WinBins.Views
                 "Donate",
                 WorkspacePane.Donate,
                 out _donateNavPill);
+            _donateNavRow.Visibility = Visibility.Collapsed;
             navFooter.Children.Add(_donateNavRow);
 
             _settingsNavRow = CreateFooterNavRow(
@@ -2671,11 +2672,11 @@ namespace WinBins.Views
             };
 
             var checkUpdateBtn = FluentTheme.CreateButton("Check for updates", padding: new Thickness(11, 6, 12, 6), iconGlyph: "\uE72C");
-            checkUpdateBtn.Margin = new Thickness(0, 0, 8, 0);
             checkUpdateBtn.Click += CheckForUpdates_Click;
             heroActions.Children.Add(checkUpdateBtn);
 
             var supportBtn = FluentTheme.CreateButton("Donate", padding: new Thickness(12, 6, 13, 6), iconGlyph: "\uEB51");
+            supportBtn.Visibility = Visibility.Collapsed;
             supportBtn.Click += (_, __) =>
             {
                 _activePane = WorkspacePane.Donate;
