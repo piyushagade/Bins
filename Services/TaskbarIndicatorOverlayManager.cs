@@ -74,6 +74,15 @@ namespace WinBins.Services
             if (_disposed)
                 return;
 
+            // Only fires when foreground/hidden windows actually change (not on idle polls).
+            // Re-scan taskbar button rects (throttled) so indicators track centered Windows 11 taskbar shifts.
+            int now = Environment.TickCount;
+            if (Math.Abs(now - _lastRectRequestTick) > 2000)
+            {
+                _lastRectRequestTick = now;
+                _taskbarManager.RequestButtonRectRefresh();
+            }
+
             SyncIndicators();
         }
 

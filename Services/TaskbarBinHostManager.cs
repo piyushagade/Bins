@@ -758,50 +758,12 @@ namespace WinBins.Services
             if (trayHwnd == IntPtr.Zero)
                 return null;
 
-            // On Windows 10, scope UIA directly to MSTaskListWClass so we skip Start/Search/System Tray/Clock.
-            // On Windows 11, taskbar buttons live in XAML directly under Shell_TrayWnd.
-            IntPtr searchHwnd = trayHwnd;
-            IntPtr rebar = Win32Interop.FindWindowExW(trayHwnd, IntPtr.Zero, "ReBarWindow32", null);
-            if (rebar != IntPtr.Zero)
-            {
-                IntPtr taskSw = Win32Interop.FindWindowExW(rebar, IntPtr.Zero, "MSTaskSwWClass", null);
-                if (taskSw != IntPtr.Zero)
-                {
-                    IntPtr taskList = Win32Interop.FindWindowExW(taskSw, IntPtr.Zero, "MSTaskListWClass", null);
-                    if (taskList != IntPtr.Zero)
-                    {
-                        searchHwnd = taskList;
-                    }
-                }
-            }
-
-            AutomationElement rootEl = AutomationElement.FromHandle(searchHwnd);
-            if (rootEl == null)
+            AutomationElement trayEl = AutomationElement.FromHandle(trayHwnd);
+            if (trayEl == null)
                 return null;
 
             var condition = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button);
-
-            // Fetch AutomationId & BoundingRectangle in a single cross-process batch with AutomationElementMode.None
-            // so UIAutomationCore does not retain live COM proxies for every taskbar button.
-            var cacheRequest = new CacheRequest
-            {
-                AutomationElementMode = AutomationElementMode.None,
-                TreeScope = TreeScope.Element
-            };
-            cacheRequest.Add(AutomationElement.AutomationIdProperty);
-            cacheRequest.Add(AutomationElement.BoundingRectangleProperty);
-
-            AutomationElementCollection buttons;
-            using (cacheRequest.Activate())
-            {
-                buttons = rootEl.FindAll(TreeScope.Descendants, condition);
-                if ((buttons == null || buttons.Count == 0) && searchHwnd != trayHwnd)
-                {
-                    AutomationElement fallbackEl = AutomationElement.FromHandle(trayHwnd);
-                    buttons = fallbackEl?.FindAll(TreeScope.Descendants, condition);
-                }
-            }
-
+            AutomationElementCollection buttons = trayEl.FindAll(TreeScope.Descendants, condition);
             if (buttons == null || buttons.Count == 0)
                 return null;
 
@@ -813,7 +775,7 @@ namespace WinBins.Services
                 try
                 {
                     AutomationElement btn = buttons[i];
-                    string autoId = btn.Cached.AutomationId ?? string.Empty;
+                    string autoId = btn.Current.AutomationId ?? string.Empty;
                     if (string.IsNullOrEmpty(autoId))
                         continue;
 
@@ -822,7 +784,7 @@ namespace WinBins.Services
                         if (!matchedSet.Contains(binId) &&
                             autoId.IndexOf(binId, StringComparison.OrdinalIgnoreCase) >= 0)
                         {
-                            System.Windows.Rect rect = btn.Cached.BoundingRectangle;
+                            System.Windows.Rect rect = btn.Current.BoundingRectangle;
                             if (!rect.IsEmpty && !double.IsInfinity(rect.Left) && !double.IsNaN(rect.Left))
                             {
                                 matchedSet.Add(binId);
