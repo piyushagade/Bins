@@ -9,7 +9,8 @@ PublisherUrl: https://app.piyushagade.xyz/bins
 PublisherSupportUrl: https://github.com/piyushagade/Bins/issues
 PackageName: Bins for Windows 11
 PackageUrl: https://app.piyushagade.xyz/bins
-License: MIT
+License: PolyForm-Noncommercial-1.0.0
+LicenseUrl: https://github.com/piyushagade/Bins/blob/main/LICENSE
 ShortDescription: Native Windows 11 grouped taskbar icon launcher with mosaic icons, Smart Live Folders, profiles, and WinUI 3 flyouts.
 Tags:
   - taskbar
