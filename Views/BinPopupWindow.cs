@@ -60,6 +60,7 @@ namespace WinBins.Views
         private BinGroup _currentBin;
         private IntPtr _priorForegroundHwnd;
         private bool _suppressDeactivateClose;
+        private int _activeContextMenuCount;
 
         private string _filterText = string.Empty;
         private string _activeSectionTab = null; // null = All
@@ -502,7 +503,7 @@ namespace WinBins.Views
 
             // Never auto-dismiss while a context menu/dialog is open, user is dragging, or user started typing a filter
             bool leftDown = (Win32Interop.GetAsyncKeyState(Win32Interop.VK_LBUTTON) & 0x8000) != 0;
-            if (_suppressDeactivateClose || leftDown || !string.IsNullOrEmpty(_filterText))
+            if (_suppressDeactivateClose || _activeContextMenuCount > 0 || leftDown || !string.IsNullOrEmpty(_filterText))
             {
                 _hoverOutsideStartTick = 0;
                 return;
@@ -1598,14 +1599,80 @@ namespace WinBins.Views
             menu.Placement = PlacementMode.Right;
 
             PopulateFolderPeekMenu(menu, folderPath, _iconService, () => HidePopup(), depth: 0);
+            ShowManagedContextMenu(menu);
+        }
 
-            _suppressDeactivateClose = true;
+        private void ShowManagedContextMenu(ContextMenu menu)
+        {
+            if (menu == null)
+                return;
+
+            bool leafItemClicked = false;
+            bool wasEscape = false;
+
+            menu.AddHandler(
+                MenuItem.ClickEvent,
+                new RoutedEventHandler((_, e) =>
+                {
+                    if (!(e.OriginalSource is MenuItem mi) || !mi.HasItems)
+                    {
+                        leafItemClicked = true;
+                    }
+                }),
+                handledEventsToo: true);
+
+            menu.PreviewKeyDown += (_, e) =>
+            {
+                Key k = e.Key == Key.System ? e.SystemKey : e.Key;
+                if (k == Key.Escape)
+                {
+                    wasEscape = true;
+                }
+            };
+
+            _activeContextMenuCount++;
             menu.Closed += (_, __) =>
             {
-                _suppressDeactivateClose = false;
-                if (IsVisible)
-                    Activate();
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    _activeContextMenuCount = Math.Max(0, _activeContextMenuCount - 1);
+                    if (_activeContextMenuCount > 0 || !IsVisible || _suppressDeactivateClose)
+                        return;
+
+                    if (leafItemClicked || wasEscape)
+                    {
+                        Activate();
+                        return;
+                    }
+
+                    // Dismissed by clicking outside the menu — keep BinPopupWindow open only if click was inside the flyout
+                    bool clickedInsidePopup = false;
+                    IntPtr hwnd = new WindowInteropHelper(this).Handle;
+                    if (hwnd != IntPtr.Zero &&
+                        Win32Interop.GetCursorPos(out Win32Interop.POINT pt) &&
+                        Win32Interop.GetWindowRect(hwnd, out Win32Interop.RECT rect))
+                    {
+                        clickedInsidePopup = pt.X >= rect.Left && pt.X <= rect.Right &&
+                                             pt.Y >= rect.Top && pt.Y <= rect.Bottom;
+                    }
+
+                    if (clickedInsidePopup)
+                    {
+                        Activate();
+                    }
+                    else
+                    {
+                        if (Win32Interop.GetCursorPos(out Win32Interop.POINT curPt))
+                        {
+                            _lastDeactivatedBinId = _currentBin?.Id;
+                            _lastDeactivatedTick = Environment.TickCount;
+                            _lastDeactivatedCursor = new System.Drawing.Point(curPt.X, curPt.Y);
+                        }
+                        HidePopup();
+                    }
+                }), DispatcherPriority.ContextIdle);
             };
+
             menu.IsOpen = true;
         }
 
@@ -1916,14 +1983,7 @@ namespace WinBins.Views
                 _onCustomizeRequested?.Invoke(target);
             }, iconGlyph: "\uE713"));
 
-            _suppressDeactivateClose = true;
-            menu.Closed += (_, __) =>
-            {
-                _suppressDeactivateClose = false;
-                if (IsVisible)
-                    Activate();
-            };
-            menu.IsOpen = true;
+            ShowManagedContextMenu(menu);
         }
 
         private void OpenTileContextMenu(FrameworkElement target, BinItem item, int index, string folderPathForPeek)
@@ -1985,13 +2045,7 @@ namespace WinBins.Views
                     }
                 }, iconGlyph: "\uE718"));
 
-                _suppressDeactivateClose = true;
-                menu.Closed += (_, __) =>
-                {
-                    _suppressDeactivateClose = false;
-                    if (IsVisible) Activate();
-                };
-                menu.IsOpen = true;
+                ShowManagedContextMenu(menu);
                 return;
             }
 
@@ -2375,14 +2429,7 @@ namespace WinBins.Views
                 }
             }, isDanger: true, iconGlyph: "\uE74D"));
 
-            _suppressDeactivateClose = true;
-            menu.Closed += (_, __) =>
-            {
-                _suppressDeactivateClose = false;
-                if (IsVisible)
-                    Activate();
-            };
-            menu.IsOpen = true;
+            ShowManagedContextMenu(menu);
         }
 
         private void MoveItem(int fromIdx, int toIdx)
@@ -2426,14 +2473,7 @@ namespace WinBins.Views
                 }
             }));
 
-            _suppressDeactivateClose = true;
-            menu.Closed += (_, __) =>
-            {
-                _suppressDeactivateClose = false;
-                if (IsVisible)
-                    Activate();
-            };
-            menu.IsOpen = true;
+            ShowManagedContextMenu(menu);
         }
 
         private void AddFromStartMenu()
@@ -2707,7 +2747,7 @@ namespace WinBins.Views
 
         private void BinPopupWindow_Deactivated(object sender, EventArgs e)
         {
-            if (_suppressDeactivateClose)
+            if (_suppressDeactivateClose || _activeContextMenuCount > 0)
                 return;
 
             if (IsVisible)
