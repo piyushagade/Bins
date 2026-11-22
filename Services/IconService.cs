@@ -416,7 +416,7 @@ namespace WinBins.Services
                 return string.Empty;
 
             int rev = Math.Max(1, bin.IconRevision);
-            string icoPath = Path.Combine(_configService.IconsFolder, $"bin_{bin.Id}_{rev}_v2.ico");
+            string icoPath = Path.Combine(_configService.IconsFolder, $"bin_{bin.Id}_{rev}_v3.ico");
             try
             {
                 using (Bitmap bmp = CreateBinBitmap(bin))
@@ -431,8 +431,8 @@ namespace WinBins.Services
             // Clean older revision icon files (keep current and previous revision so Explorer never races on reload)
             try
             {
-                string currentName = $"bin_{bin.Id}_{rev}_v2.ico";
-                string prevName = $"bin_{bin.Id}_{Math.Max(1, rev - 1)}_v2.ico";
+                string currentName = $"bin_{bin.Id}_{rev}_v3.ico";
+                string prevName = $"bin_{bin.Id}_{Math.Max(1, rev - 1)}_v3.ico";
                 string pattern = $"bin_{bin.Id}_*.ico";
                 foreach (string oldFile in Directory.GetFiles(_configService.IconsFolder, pattern))
                 {

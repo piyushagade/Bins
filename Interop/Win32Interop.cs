@@ -1136,22 +1136,22 @@ namespace WinBins.Interop
                                 DrawEmptyPlaceholderGrid(g, inset: true);
                                 break;
                             case 1:
-                                DrawSubIcon(g, validIcons[0], new Rectangle(12, 12, 104, 104), imageAttrs);
+                                DrawSubIcon(g, validIcons[0], new Rectangle(17, 17, 94, 94), imageAttrs);
                                 break;
                             case 2:
-                                DrawSubIcon(g, validIcons[0], new Rectangle(5, 5, 57, 57), imageAttrs);
-                                DrawSubIcon(g, validIcons[1], new Rectangle(66, 66, 57, 57), imageAttrs);
+                                DrawSubIcon(g, validIcons[0], new Rectangle(9, 9, 52, 52), imageAttrs);
+                                DrawSubIcon(g, validIcons[1], new Rectangle(67, 67, 52, 52), imageAttrs);
                                 break;
                             case 3:
-                                DrawSubIcon(g, validIcons[0], new Rectangle(5, 5, 55, 55), imageAttrs);
-                                DrawSubIcon(g, validIcons[1], new Rectangle(68, 5, 55, 55), imageAttrs);
-                                DrawSubIcon(g, validIcons[2], new Rectangle(36, 68, 55, 55), imageAttrs);
+                                DrawSubIcon(g, validIcons[0], new Rectangle(9, 9, 51, 51), imageAttrs);
+                                DrawSubIcon(g, validIcons[1], new Rectangle(68, 9, 51, 51), imageAttrs);
+                                DrawSubIcon(g, validIcons[2], new Rectangle(38, 68, 51, 51), imageAttrs);
                                 break;
                             default:
-                                DrawSubIcon(g, validIcons[0], new Rectangle(5, 5, 55, 55), imageAttrs);
-                                DrawSubIcon(g, validIcons[1], new Rectangle(68, 5, 55, 55), imageAttrs);
-                                DrawSubIcon(g, validIcons[2], new Rectangle(5, 68, 55, 55), imageAttrs);
-                                DrawSubIcon(g, validIcons[3], new Rectangle(68, 68, 55, 55), imageAttrs);
+                                DrawSubIcon(g, validIcons[0], new Rectangle(9, 9, 51, 51), imageAttrs);
+                                DrawSubIcon(g, validIcons[1], new Rectangle(68, 9, 51, 51), imageAttrs);
+                                DrawSubIcon(g, validIcons[2], new Rectangle(9, 68, 51, 51), imageAttrs);
+                                DrawSubIcon(g, validIcons[3], new Rectangle(68, 68, 51, 51), imageAttrs);
                                 break;
                         }
                     }
@@ -1211,8 +1211,8 @@ namespace WinBins.Interop
                 ? Color.FromArgb(145, BlendByte(tintColor.Value.R, 255, 0.62), BlendByte(tintColor.Value.G, 255, 0.62), BlendByte(tintColor.Value.B, 255, 0.62))
                 : Color.FromArgb(76, 255, 255, 255);
 
-            using (GraphicsPath fillPath = CreateRoundedRectPath(fullRect, 15))
-            using (GraphicsPath strokePath = CreateRoundedRectPath(strokeRect, 14))
+            using (GraphicsPath fillPath = CreateRoundedRectPath(fullRect, 18))
+            using (GraphicsPath strokePath = CreateRoundedRectPath(strokeRect, 17))
             using (var fillBrush = new LinearGradientBrush(fullRect, topFill, botFill, LinearGradientMode.Vertical))
             using (var borderPen = new Pen(strokeCol, 1.8f))
             {
@@ -1261,7 +1261,7 @@ namespace WinBins.Interop
                 using (var imageAttrs = new ImageAttributes())
                 {
                     imageAttrs.SetWrapMode(WrapMode.TileFlipXY);
-                    int margin = showBackplate ? 6 : 4;
+                    int margin = showBackplate ? 9 : 4;
                     int gap = showBackplate ? 5 : 6;
                     int cell = (canvasSize - 2 * margin - 2 * gap) / 3;
 
@@ -1476,10 +1476,10 @@ namespace WinBins.Interop
             Rectangle[] slots = inset
                 ? new[]
                 {
-                    new Rectangle(5, 5, 55, 55),
-                    new Rectangle(68, 5, 55, 55),
-                    new Rectangle(5, 68, 55, 55),
-                    new Rectangle(68, 68, 55, 55)
+                    new Rectangle(9, 9, 51, 51),
+                    new Rectangle(68, 9, 51, 51),
+                    new Rectangle(9, 68, 51, 51),
+                    new Rectangle(68, 68, 51, 51)
                 }
                 : new[]
                 {
