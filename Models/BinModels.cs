@@ -217,6 +217,9 @@ namespace WinBins.Models
         [DataMember(Order = 26)]
         public string AccentColorHex { get; set; }
 
+        [DataMember(Order = 27)]
+        public bool FloatOpenAppsFirst { get; set; }
+
         public BinGroup()
         {
             SetFieldDefaults();
@@ -256,6 +259,7 @@ namespace WinBins.Models
             LiveFolderMaxItems = 12;
             LiveFolderSort = LiveFolderSortOrder.NewestFirst;
             AccentColorHex = string.Empty;
+            FloatOpenAppsFirst = false;
         }
 
         public void EnsureDefaults()

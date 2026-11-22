@@ -1,6 +1,6 @@
 # Bins for Windows 11
 
-A native Windows 11 grouped taskbar icon launcher (**v1.4.3**), built with C#, WPF (WinUI 3 Dark / Light / System Fluent styling), and Win32 Shell / DWM COM Interop.
+A native Windows 11 grouped taskbar icon launcher (**v1.4.4**), built with C#, WPF (WinUI 3 Dark / Light / System Fluent styling), and Win32 Shell / DWM COM Interop.
 
 ## Features
 
@@ -22,7 +22,7 @@ A native Windows 11 grouped taskbar icon launcher (**v1.4.3**), built with C#, W
    - **Per-Item Properties Dialog**: Configure custom command-line arguments, working directory, window state (`Normal` / `Maximized` / `Minimized`), **Always run as administrator** (with UAC shield badge), and **Smart Workspace ("Open all")** inclusion & staggered launch delay
 
 4. **Running-App Window Switcher & Drag-and-Drop Power Workflows**:
-   - **Running-App Indicators & Switcher**: Windows 11 pill indicators under running app tiles; click to toggle minimize/restore or cycle open windows, `Shift+Click` / `Middle-Click` for a new instance, or right-click to switch/close individual windows
+   - **Running-App Taskbar Dots, Hover Peek & Switcher**: Native click-through Windows 11 multi-dot / active-pill indicators under taskbar Bins, compact Acrylic **"Open in Bin"** hover preview strip (`×` close + 1-click focus/minimize), accented running tile cards with multi-window count badges (`2`, `3`, ...), and optional **Float open apps first** per Bin
    - **Drop Files Onto App, Folder, or Recycle Bin Tiles**: Drag a file over a Bin's taskbar icon to pop open its flyout automatically, then drop onto an **App** tile to open with that app, a **Folder** tile to move/copy (`SHFileOperationW`), or the **Recycle Bin** tile to delete with Undo support
    - **Drag-and-Drop Reordering & Cross-Bin Move**: Reorder tiles directly inside the flyout, reorder items and Bins in Bins Manager, or drag items onto another Bin in the sidebar to move them
 

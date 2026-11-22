@@ -18,6 +18,13 @@ namespace WinBins.Services
         public bool IsMinimized { get; set; }
     }
 
+    public sealed class BinRunningAppSummary
+    {
+        public BinItem Item { get; set; }
+        public List<RunningWindowEntry> Windows { get; set; }
+        public bool IsForeground { get; set; }
+    }
+
     public sealed class RunningAppsTaskbarManager : IDisposable
     {
         private sealed class ResolvedTargetExe
@@ -25,6 +32,7 @@ namespace WinBins.Services
             public string SourceKey;
             public string FullExePath;
             public string ExeFileName;
+            public string PackagePrefix;
             public bool IsExplorerExe;
         }
 
@@ -90,6 +98,8 @@ namespace WinBins.Services
         private bool _switcherRestoreActive;
         private int _switcherLastActivityTick;
         private bool _disposed;
+
+        public event Action RunningStateChanged;
 
         public RunningAppsTaskbarManager(ConfigService configService, Dispatcher dispatcher)
         {
@@ -461,6 +471,7 @@ namespace WinBins.Services
 
                 var targetFullPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var targetFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var targetPackagePrefixes = new List<string>();
                 bool hideExplorerWindows = false;
 
                 foreach (BinGroup bin in activeBins)
@@ -486,14 +497,26 @@ namespace WinBins.Services
                         {
                             targetFileNames.Add(resolved.ExeFileName);
                         }
+                        if (!string.IsNullOrWhiteSpace(resolved.PackagePrefix) &&
+                            !targetPackagePrefixes.Contains(resolved.PackagePrefix, StringComparer.OrdinalIgnoreCase))
+                        {
+                            targetPackagePrefixes.Add(resolved.PackagePrefix);
+                        }
                     }
                 }
 
-                bool hasAnyActiveTargets = targetFullPaths.Count > 0 || targetFileNames.Count > 0 || hideExplorerWindows;
+                bool hasAnyActiveTargets =
+                    targetFullPaths.Count > 0 ||
+                    targetFileNames.Count > 0 ||
+                    targetPackagePrefixes.Count > 0 ||
+                    hideExplorerWindows;
                 EnsureKeyboardHookState(hasAnyActiveTargets);
 
                 if (!hasAnyActiveTargets && _hiddenHwnds.Count == 0)
+                {
+                    RunningStateChanged?.Invoke();
                     return;
+                }
 
                 // While Alt+Tab / Win+Tab / Snap Assist is active, keep binned windows visible in the switcher.
                 if (_switcherRestoreActive)
@@ -541,13 +564,14 @@ namespace WinBins.Services
                         bool stillTargeted = false;
                         if (hasAnyActiveTargets &&
                             IsTaskbarEligibleAppWindow(hwnd, _currentPid, out uint pid, out string className) &&
-                            TryGetCachedProcessExe(pid, pidExeCache, out string exePath))
+                            TryGetWindowProcessExe(hwnd, pid, pidExeCache, out string exePath))
                         {
                             stillTargeted = DoesProcessMatchTargets(
                                 exePath,
                                 className,
                                 targetFullPaths,
                                 targetFileNames,
+                                targetPackagePrefixes,
                                 hideExplorerWindows);
                         }
 
@@ -563,18 +587,21 @@ namespace WinBins.Services
                 }
 
                 if (!hasAnyActiveTargets)
+                {
+                    RunningStateChanged?.Invoke();
                     return;
+                }
 
-                // 2. Discover running top-level windows matching active Bins and hide duplicate taskbar buttons
+                // 2. Discover running top-level windows matching active Bins and hide standalone taskbar buttons
                 Win32Interop.EnumWindows((hwnd, lParam) =>
                 {
                     if (!IsTaskbarEligibleAppWindow(hwnd, _currentPid, out uint pid, out string className))
                         return true;
 
-                    if (!TryGetCachedProcessExe(pid, pidExeCache, out string exePath))
+                    if (!TryGetWindowProcessExe(hwnd, pid, pidExeCache, out string exePath))
                         return true;
 
-                    if (DoesProcessMatchTargets(exePath, className, targetFullPaths, targetFileNames, hideExplorerWindows))
+                    if (DoesProcessMatchTargets(exePath, className, targetFullPaths, targetFileNames, targetPackagePrefixes, hideExplorerWindows))
                     {
                         if (forceReassert || !_hiddenHwnds.Contains(hwnd))
                         {
@@ -593,10 +620,116 @@ namespace WinBins.Services
 
                     return true;
                 }, IntPtr.Zero);
+
+                RunningStateChanged?.Invoke();
             }
             catch
             {
             }
+        }
+
+        /// <summary>
+        /// Single-pass lookup returning all currently running items and their open windows for a BinGroup.
+        /// </summary>
+        public List<BinRunningAppSummary> GetRunningAppsForBin(BinGroup bin)
+        {
+            var summaries = new List<BinRunningAppSummary>();
+            if (_disposed || bin?.Items == null || bin.Items.Count == 0)
+                return summaries;
+
+            var itemCandidates = new List<Tuple<BinItem, HashSet<string>, HashSet<string>, List<string>, bool, List<RunningWindowEntry>>>();
+            foreach (BinItem item in bin.Items)
+            {
+                if (item == null)
+                    continue;
+
+                ResolvedTargetExe resolved = ResolveItemExecutableTarget(item);
+                if (resolved == null)
+                    continue;
+
+                var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var pkgPrefixes = new List<string>();
+
+                if (!resolved.IsExplorerExe)
+                {
+                    if (!string.IsNullOrWhiteSpace(resolved.FullExePath))
+                        paths.Add(resolved.FullExePath);
+                    if (!string.IsNullOrWhiteSpace(resolved.ExeFileName) && !GenericHostExeNames.Contains(resolved.ExeFileName))
+                        names.Add(resolved.ExeFileName);
+                    if (!string.IsNullOrWhiteSpace(resolved.PackagePrefix))
+                        pkgPrefixes.Add(resolved.PackagePrefix);
+                }
+
+                if (!resolved.IsExplorerExe && paths.Count == 0 && names.Count == 0 && pkgPrefixes.Count == 0)
+                    continue;
+
+                itemCandidates.Add(Tuple.Create(item, paths, names, pkgPrefixes, resolved.IsExplorerExe, new List<RunningWindowEntry>()));
+            }
+
+            if (itemCandidates.Count == 0)
+                return summaries;
+
+            IntPtr fgHwnd = Win32Interop.GetForegroundWindow();
+            var pidExeCache = new Dictionary<uint, string>();
+
+            try
+            {
+                Win32Interop.EnumWindows((hwnd, lParam) =>
+                {
+                    if (!IsTaskbarEligibleAppWindow(hwnd, _currentPid, out uint pid, out string className))
+                        return true;
+
+                    if (!TryGetWindowProcessExe(hwnd, pid, pidExeCache, out string exePath))
+                        return true;
+
+                    string title = null;
+                    bool isMin = false;
+                    bool computedMeta = false;
+
+                    for (int i = 0; i < itemCandidates.Count; i++)
+                    {
+                        var c = itemCandidates[i];
+                        if (DoesProcessMatchTargets(exePath, className, c.Item2, c.Item3, c.Item4, c.Item5))
+                        {
+                            if (!computedMeta)
+                            {
+                                title = Win32Interop.GetWindowTextSafe(hwnd);
+                                isMin = Win32Interop.IsIconic(hwnd);
+                                computedMeta = true;
+                            }
+
+                            c.Item6.Add(new RunningWindowEntry
+                            {
+                                Hwnd = hwnd,
+                                Title = string.IsNullOrWhiteSpace(title) ? c.Item1.Name : title,
+                                IsForeground = hwnd == fgHwnd,
+                                IsMinimized = isMin
+                            });
+                        }
+                    }
+
+                    return true;
+                }, IntPtr.Zero);
+            }
+            catch
+            {
+            }
+
+            foreach (var c in itemCandidates)
+            {
+                if (c.Item6.Count > 0)
+                {
+                    summaries.Add(new BinRunningAppSummary
+                    {
+                        Item = c.Item1,
+                        Windows = c.Item6,
+                        IsForeground = c.Item6.Any(w => w.IsForeground && !w.IsMinimized)
+                    });
+                }
+            }
+
+            return summaries;
         }
 
         /// <summary>
@@ -615,15 +748,18 @@ namespace WinBins.Services
 
             var singlePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var singleNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var singlePackages = new List<string>();
             if (!resolved.IsExplorerExe)
             {
                 if (!string.IsNullOrWhiteSpace(resolved.FullExePath))
                     singlePaths.Add(resolved.FullExePath);
                 if (!string.IsNullOrWhiteSpace(resolved.ExeFileName) && !GenericHostExeNames.Contains(resolved.ExeFileName))
                     singleNames.Add(resolved.ExeFileName);
+                if (!string.IsNullOrWhiteSpace(resolved.PackagePrefix))
+                    singlePackages.Add(resolved.PackagePrefix);
             }
 
-            if (!resolved.IsExplorerExe && singlePaths.Count == 0 && singleNames.Count == 0)
+            if (!resolved.IsExplorerExe && singlePaths.Count == 0 && singleNames.Count == 0 && singlePackages.Count == 0)
                 return results;
 
             IntPtr fgHwnd = Win32Interop.GetForegroundWindow();
@@ -636,10 +772,10 @@ namespace WinBins.Services
                     if (!IsTaskbarEligibleAppWindow(hwnd, _currentPid, out uint pid, out string className))
                         return true;
 
-                    if (!TryGetCachedProcessExe(pid, pidExeCache, out string exePath))
+                    if (!TryGetWindowProcessExe(hwnd, pid, pidExeCache, out string exePath))
                         return true;
 
-                    if (DoesProcessMatchTargets(exePath, className, singlePaths, singleNames, resolved.IsExplorerExe))
+                    if (DoesProcessMatchTargets(exePath, className, singlePaths, singleNames, singlePackages, resolved.IsExplorerExe))
                     {
                         string title = Win32Interop.GetWindowTextSafe(hwnd);
                         results.Add(new RunningWindowEntry
@@ -681,6 +817,28 @@ namespace WinBins.Services
             }
 
             string expanded = Environment.ExpandEnvironmentVariables(rawPath.Trim('"'));
+
+            // Handle packaged Store / MSIX / UWP apps: shell:AppsFolder\<PackageFamilyName>!<AppId>
+            if (expanded.StartsWith(BinItem.ShellAppsPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                string aumid = expanded.Substring(BinItem.ShellAppsPrefix.Length).Trim();
+                int bang = aumid.IndexOf('!');
+                string family = bang > 0 ? aumid.Substring(0, bang) : aumid;
+                int lastUnderscore = family.LastIndexOf('_');
+                string pkgPrefix = lastUnderscore > 2 ? family.Substring(0, lastUnderscore + 1) : null;
+                if (!string.IsNullOrWhiteSpace(pkgPrefix))
+                {
+                    var pkgResult = new ResolvedTargetExe
+                    {
+                        SourceKey = cacheKey,
+                        PackagePrefix = pkgPrefix,
+                        IsExplorerExe = false
+                    };
+                    _resolvedItemCache[cacheKey] = pkgResult;
+                    return pkgResult;
+                }
+            }
+
             string ext = Path.GetExtension(expanded)?.ToLowerInvariant() ?? string.Empty;
 
             ResolvedTargetExe result = null;
@@ -688,8 +846,19 @@ namespace WinBins.Services
             if (ext == ".exe")
             {
                 string exeName = Path.GetFileName(expanded);
-                if (!string.IsNullOrWhiteSpace(exeName) &&
-                    !string.Equals(exeName, "Bins.exe", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(exeName, "wt.exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    result = new ResolvedTargetExe
+                    {
+                        SourceKey = cacheKey,
+                        FullExePath = SafeNormalizeFullPath(expanded),
+                        ExeFileName = "WindowsTerminal.exe",
+                        PackagePrefix = "Microsoft.WindowsTerminal_",
+                        IsExplorerExe = false
+                    };
+                }
+                else if (!string.IsNullOrWhiteSpace(exeName) &&
+                         !string.Equals(exeName, "Bins.exe", StringComparison.OrdinalIgnoreCase))
                 {
                     result = new ResolvedTargetExe
                     {
@@ -786,6 +955,28 @@ namespace WinBins.Services
             }
         }
 
+        private static bool TryGetWindowProcessExe(IntPtr hwnd, uint pid, Dictionary<uint, string> cache, out string exePath)
+        {
+            if (!TryGetCachedProcessExe(pid, cache, out exePath))
+                return false;
+
+            // Unwrap UWP ApplicationFrameHost.exe windows to their hosted CoreWindow's real app PID
+            if (string.Equals(Path.GetFileName(exePath), "ApplicationFrameHost.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                IntPtr coreChild = Win32Interop.FindWindowExW(hwnd, IntPtr.Zero, "Windows.UI.Core.CoreWindow", null);
+                if (coreChild != IntPtr.Zero)
+                {
+                    Win32Interop.GetWindowThreadProcessId(coreChild, out uint uwpPid);
+                    if (uwpPid != 0 && uwpPid != pid && TryGetCachedProcessExe(uwpPid, cache, out string uwpExe))
+                    {
+                        exePath = uwpExe;
+                    }
+                }
+            }
+
+            return !string.IsNullOrWhiteSpace(exePath);
+        }
+
         private static bool TryGetCachedProcessExe(uint pid, Dictionary<uint, string> cache, out string exePath)
         {
             if (cache.TryGetValue(pid, out exePath))
@@ -803,6 +994,7 @@ namespace WinBins.Services
             string windowClassName,
             HashSet<string> targetFullPaths,
             HashSet<string> targetFileNames,
+            List<string> targetPackagePrefixes,
             bool matchExplorerCabinet)
         {
             if (string.IsNullOrWhiteSpace(processExePath))
@@ -818,11 +1010,21 @@ namespace WinBins.Services
                        string.Equals(windowClassName, "CabinetWClass", StringComparison.OrdinalIgnoreCase);
             }
 
-            if (targetFullPaths.Contains(processExePath))
+            if (targetFullPaths != null && targetFullPaths.Contains(processExePath))
                 return true;
 
-            if (targetFileNames.Contains(procFileName))
+            if (targetFileNames != null && targetFileNames.Contains(procFileName))
                 return true;
+
+            if (targetPackagePrefixes != null && targetPackagePrefixes.Count > 0 &&
+                processExePath.IndexOf(@"\WindowsApps\", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                for (int i = 0; i < targetPackagePrefixes.Count; i++)
+                {
+                    if (processExePath.IndexOf(@"\" + targetPackagePrefixes[i], StringComparison.OrdinalIgnoreCase) >= 0)
+                        return true;
+                }
+            }
 
             return false;
         }

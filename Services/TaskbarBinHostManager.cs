@@ -60,6 +60,8 @@ namespace WinBins.Services
 
         public event Action<BinGroup, System.Drawing.Point> BinTaskbarIconClicked;
         public event Action<BinGroup, System.Drawing.Point, bool> BinTaskbarHoverTriggered;
+        public event Action<BinGroup, System.Drawing.Point> BinTaskbarPeekTriggered;
+        public event Action TaskbarButtonRectsUpdated;
         public event Action BinClosedFromTaskbar;
         public event Action TaskbarPinStateChanged;
 
@@ -536,14 +538,8 @@ namespace WinBins.Services
             }
 
             bool isDragHoverCandidate = leftDown && _wasLeftButtonDownOutsideTray;
-            if (!hoverEnabled && !isDragHoverCandidate)
-            {
-                _hoveredBinId = null;
-                _hoverFiredForCurrentStay = false;
-                return;
-            }
 
-            // Refresh cached button rects in background if empty or older than 8 seconds
+            // Refresh cached button rects in background if empty or older than 6 seconds
             long nowTick = Environment.TickCount;
             bool needRefresh;
             string matchedBinId = null;
@@ -551,7 +547,7 @@ namespace WinBins.Services
 
             lock (_buttonRectsLock)
             {
-                needRefresh = _cachedButtonRects.Count == 0 || Math.Abs(nowTick - _lastButtonRectScanTick) > 8000;
+                needRefresh = _cachedButtonRects.Count == 0 || Math.Abs(nowTick - _lastButtonRectScanTick) > 6000;
                 foreach (var kv in _cachedButtonRects)
                 {
                     System.Windows.Rect r = kv.Value;
@@ -588,7 +584,7 @@ namespace WinBins.Services
             {
                 int thresholdMs = isDragHoverCandidate
                     ? 340
-                    : Math.Max(120, _configService.Current?.HoverOpenDelayMs ?? 280);
+                    : (hoverEnabled ? Math.Max(120, _configService.Current?.HoverOpenDelayMs ?? 280) : 360);
 
                 if (Math.Abs(Environment.TickCount - _hoverEnterTick) >= thresholdMs)
                 {
@@ -596,14 +592,27 @@ namespace WinBins.Services
                     BinGroup bin = FindBin(matchedBinId);
                     if (bin != null)
                     {
-                        Win32Interop.DismissTaskbarThumbnailWindows();
                         var anchorPt = new System.Drawing.Point(
                             (int)Math.Round(matchedRect.Left + matchedRect.Width / 2.0),
                             (int)Math.Round(matchedRect.Top + matchedRect.Height / 2.0));
-                        BinTaskbarHoverTriggered?.Invoke(bin, anchorPt, isDragHoverCandidate);
+
+                        if (hoverEnabled || isDragHoverCandidate)
+                        {
+                            Win32Interop.DismissTaskbarThumbnailWindows();
+                            BinTaskbarHoverTriggered?.Invoke(bin, anchorPt, isDragHoverCandidate);
+                        }
+                        else if (!leftDown)
+                        {
+                            BinTaskbarPeekTriggered?.Invoke(bin, anchorPt);
+                        }
                     }
                 }
             }
+        }
+
+        public void RequestButtonRectRefresh()
+        {
+            CaptureTaskbarOrderAsync(forceRectScan: true);
         }
 
         private List<string> GetAllTaskbarActiveBinIds()
@@ -625,8 +634,17 @@ namespace WinBins.Services
                 return;
 
             var activeBinIds = GetAllTaskbarActiveBinIds();
-            if (activeBinIds.Count == 0 || (!forceRectScan && activeBinIds.Count < 2 && _cachedButtonRects.Count > 0))
+            if (activeBinIds.Count == 0)
                 return;
+
+            if (!forceRectScan && activeBinIds.Count < 2)
+            {
+                lock (_buttonRectsLock)
+                {
+                    if (_cachedButtonRects.Count > 0 && Math.Abs(Environment.TickCount - _lastButtonRectScanTick) < 3500)
+                        return;
+                }
+            }
 
             _capturingOrder = true;
 
@@ -644,13 +662,14 @@ namespace WinBins.Services
                         }
                     }
 
-                    if (orderedIds != null && orderedIds.Count > 1)
+                    _dispatcher.BeginInvoke(new Action(() =>
                     {
-                        _dispatcher.BeginInvoke(new Action(() =>
+                        if (orderedIds != null && orderedIds.Count > 1)
                         {
                             ApplyCapturedOrder(orderedIds);
-                        }));
-                    }
+                        }
+                        TaskbarButtonRectsUpdated?.Invoke();
+                    }));
                 }
                 catch
                 {

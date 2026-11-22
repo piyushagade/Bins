@@ -83,9 +83,11 @@
     <Compile Include="Services\BackupSyncService.cs" />
     <Compile Include="Services\RunningAppsTaskbarManager.cs" />
     <Compile Include="Services\TaskbarBinHostManager.cs" />
+    <Compile Include="Services\TaskbarIndicatorOverlayManager.cs" />
     <Compile Include="Views\FluentTheme.cs" />
     <Compile Include="Views\ContentDialogWindow.cs" />
     <Compile Include="Views\BinPopupWindow.cs" />
+    <Compile Include="Views\BinRunningPeekWindow.cs" />
     <Compile Include="Views\StartMenuPickerWindow.cs" />
     <Compile Include="Views\IconPickerWindow.cs" />
     <Compile Include="Views\RenameDialogWindow.cs" />

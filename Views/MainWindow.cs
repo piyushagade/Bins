@@ -113,6 +113,7 @@ namespace WinBins.Views
         private TextBlock _sectionTabsText;
         private Border _sectionHeadersBtn;
         private TextBlock _sectionHeadersText;
+        private CheckBox _floatOpenAppsToggle;
         private Button _liveFolderBtn;
         private TextBlock _liveFolderBtnLabel;
         private Button _clearLiveFolderBtn;
@@ -1240,6 +1241,15 @@ namespace WinBins.Views
             sectionLayoutRow.Children.Add(_sectionHeadersBtn);
             sectionLayoutTrack.Child = sectionLayoutRow;
             layoutRows.Children.Add(CreateFlyoutSettingRow("Categories", sectionLayoutTrack));
+            layoutRows.Children.Add(CreateSettingsRowDivider());
+
+            _floatOpenAppsToggle = FluentTheme.CreateToggleCheckBox(null, false);
+            _floatOpenAppsToggle.ToolTip = "Automatically show currently open apps at the top of the Bin flyout";
+            _floatOpenAppsToggle.Checked += FloatOpenAppsToggle_Changed;
+            _floatOpenAppsToggle.Unchecked += FloatOpenAppsToggle_Changed;
+            var floatOpenRow = CreateFlyoutSettingRow("Float open apps first", _floatOpenAppsToggle);
+            floatOpenRow.ToolTip = "Automatically show currently open apps at the top of the Bin flyout";
+            layoutRows.Children.Add(floatOpenRow);
 
             layoutCard.Child = layoutRows;
             sectionsStack.Children.Add(layoutCard);
@@ -2943,6 +2953,10 @@ namespace WinBins.Views
             {
                 _hideRunningAppsBinToggle.IsChecked = _selectedBin.HideRunningAppsOnTaskbar;
             }
+            if (_floatOpenAppsToggle != null)
+            {
+                _floatOpenAppsToggle.IsChecked = _selectedBin.FloatOpenAppsFirst;
+            }
 
             RebuildItemsList();
         }
@@ -4039,6 +4053,19 @@ namespace WinBins.Views
                 return;
 
             _selectedBin.SectionLayout = layout;
+            SaveAndSyncSelectedBin(bumpIcon: false);
+        }
+
+        private void FloatOpenAppsToggle_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_updatingUi || _selectedBin == null || _floatOpenAppsToggle == null)
+                return;
+
+            bool next = _floatOpenAppsToggle.IsChecked == true;
+            if (_selectedBin.FloatOpenAppsFirst == next)
+                return;
+
+            _selectedBin.FloatOpenAppsFirst = next;
             SaveAndSyncSelectedBin(bumpIcon: false);
         }
 

@@ -75,9 +75,17 @@ namespace WinBins.Interop
         public const uint WS_MINIMIZEBOX = 0x00020000;
         public const uint WS_POPUP = 0x80000000;
 
+        public const uint WS_EX_TOPMOST = 0x00000008;
+        public const uint WS_EX_TRANSPARENT = 0x00000020;
         public const uint WS_EX_TOOLWINDOW = 0x00000080;
         public const uint WS_EX_APPWINDOW = 0x00040000;
+        public const uint WS_EX_LAYERED = 0x00080000;
         public const uint WS_EX_NOACTIVATE = 0x08000000;
+
+        public const uint ULW_ALPHA = 0x00000002;
+        public const byte AC_SRC_OVER = 0x00;
+        public const byte AC_SRC_ALPHA = 0x01;
+        public const uint MONITOR_DEFAULTTONEAREST = 2;
 
         public const int SW_HIDE = 0;
         public const int SW_SHOWMINIMIZED = 2;
@@ -616,6 +624,9 @@ namespace WinBins.Interop
         [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
         public static extern IntPtr GetWindowLongPtrW(IntPtr hWnd, int nIndex);
 
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+        public static extern IntPtr SetWindowLongPtrW(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         public static extern int GetWindowTextLengthW(IntPtr hWnd);
 
@@ -900,6 +911,96 @@ namespace WinBins.Interop
 
         [DllImport("gdi32.dll")]
         public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+        [StructLayout(LayoutKind.Sequential, Pack = 1)]
+        public struct BLENDFUNCTION
+        {
+            public byte BlendOp;
+            public byte BlendFlags;
+            public byte SourceConstantAlpha;
+            public byte AlphaFormat;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MONITORINFO
+        {
+            public int cbSize;
+            public RECT rcMonitor;
+            public RECT rcWork;
+            public uint dwFlags;
+        }
+
+        [DllImport("gdi32.dll")]
+        public static extern IntPtr SelectObject(IntPtr hdc, IntPtr hObject);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool UpdateLayeredWindow(
+            IntPtr hwnd,
+            IntPtr hdcDst,
+            ref POINT pptDst,
+            ref SIZE psize,
+            IntPtr hdcSrc,
+            ref POINT pptSrc,
+            uint crKey,
+            ref BLENDFUNCTION pblend,
+            uint dwFlags);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern bool GetMonitorInfoW(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+        public static bool IsTaskbarHiddenOrCoveredByFullscreen(IntPtr trayHwnd)
+        {
+            if (trayHwnd == IntPtr.Zero || !IsWindowVisible(trayHwnd))
+                return true;
+
+            if (!GetWindowRect(trayHwnd, out RECT trayRect))
+                return true;
+
+            IntPtr hMon = MonitorFromWindow(trayHwnd, MONITOR_DEFAULTTONEAREST);
+            if (hMon != IntPtr.Zero)
+            {
+                var mi = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
+                if (GetMonitorInfoW(hMon, ref mi))
+                {
+                    // Auto-hidden taskbar slid off the monitor edge
+                    int visibleTop = Math.Max(trayRect.Top, mi.rcMonitor.Top);
+                    int visibleBottom = Math.Min(trayRect.Bottom, mi.rcMonitor.Bottom);
+                    int visibleLeft = Math.Max(trayRect.Left, mi.rcMonitor.Left);
+                    int visibleRight = Math.Min(trayRect.Right, mi.rcMonitor.Right);
+                    if ((visibleBottom - visibleTop) < 12 || (visibleRight - visibleLeft) < 12)
+                        return true;
+
+                    // Fullscreen app covering the entire monitor (e.g. video player or game)
+                    IntPtr fg = GetForegroundWindow();
+                    if (fg != IntPtr.Zero && fg != trayHwnd && IsWindowVisible(fg) && !IsIconic(fg))
+                    {
+                        IntPtr fgMon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+                        if (fgMon == hMon && GetWindowRect(fg, out RECT fgRect))
+                        {
+                            if (fgRect.Left <= mi.rcMonitor.Left &&
+                                fgRect.Top <= mi.rcMonitor.Top &&
+                                fgRect.Right >= mi.rcMonitor.Right &&
+                                fgRect.Bottom >= mi.rcMonitor.Bottom)
+                            {
+                                string cls = GetWindowClassNameSafe(fg);
+                                if (!string.Equals(cls, "Progman", StringComparison.OrdinalIgnoreCase) &&
+                                    !string.Equals(cls, "WorkerW", StringComparison.OrdinalIgnoreCase) &&
+                                    !string.Equals(cls, "Shell_TrayWnd", StringComparison.OrdinalIgnoreCase) &&
+                                    !string.Equals(cls, "Shell_SecondaryTrayWnd", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
 
         [DllImport("gdi32.dll")]
         public static extern bool DeleteDC(IntPtr hdc);

@@ -8,15 +8,15 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyCopyright("Copyright © 2026 Piyush Agade")]
 [assembly: ComVisible(false)]
 
-[assembly: AssemblyVersion("1.4.3.0")]
-[assembly: AssemblyFileVersion("1.4.3.0")]
-[assembly: AssemblyInformationalVersion("1.4.3")]
+[assembly: AssemblyVersion("1.4.4.0")]
+[assembly: AssemblyFileVersion("1.4.4.0")]
+[assembly: AssemblyInformationalVersion("1.4.4")]
 
 namespace WinBins
 {
     public static class AppVersion
     {
-        public const string Current = "1.4.3";
+        public const string Current = "1.4.4";
         public static string Display => "v" + Current;
     }
 }

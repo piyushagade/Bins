@@ -166,8 +166,10 @@ namespace WinBins
         private IconService _iconService;
         private TaskbarBinHostManager _taskbarManager;
         private RunningAppsTaskbarManager _runningAppsManager;
+        private TaskbarIndicatorOverlayManager _indicatorOverlayManager;
         private GlobalHotkeyManager _hotkeyManager;
         private BinPopupWindow _popupWindow;
+        private BinRunningPeekWindow _peekWindow;
         private OmniSearchWindow _omniSearchWindow;
         private MainWindow _mainWindow;
         private System.Windows.Forms.NotifyIcon _trayIcon;
@@ -210,7 +212,14 @@ namespace WinBins
             _iconService = new IconService(_configService);
             _taskbarManager = new TaskbarBinHostManager(_configService, _iconService, Dispatcher);
             _runningAppsManager = new RunningAppsTaskbarManager(_configService, Dispatcher);
+            _indicatorOverlayManager = new TaskbarIndicatorOverlayManager(_configService, _taskbarManager, _runningAppsManager, Dispatcher);
             _hotkeyManager = new GlobalHotkeyManager();
+
+            _peekWindow = new BinRunningPeekWindow(
+                _configService,
+                _iconService,
+                _runningAppsManager,
+                _taskbarManager);
 
             _popupWindow = new BinPopupWindow(
                 _configService,
@@ -244,20 +253,31 @@ namespace WinBins
 
             _taskbarManager.BinTaskbarIconClicked += (bin, cursorPt) =>
             {
+                _peekWindow?.HidePeek();
                 _popupWindow.ToggleAtScreenPoint(bin, cursorPt);
             };
 
             _taskbarManager.BinTaskbarHoverTriggered += (bin, anchorPt, isDragHover) =>
             {
+                _peekWindow?.HidePeek();
                 // When triggered by dragging a file over the taskbar icon, keep popup open until drop/dismiss;
                 // when triggered by normal cursor hover, enable auto-dismiss when cursor leaves safe zone.
                 _popupWindow.ShowForBin(bin, anchorPt, openedByHover: true);
+            };
+
+            _taskbarManager.BinTaskbarPeekTriggered += (bin, anchorPt) =>
+            {
+                if (_popupWindow.IsVisible || _omniSearchWindow.IsVisible)
+                    return;
+
+                _peekWindow?.TryShowForBin(bin, anchorPt);
             };
 
             _hotkeyManager.BinHotkeyPressed += bin =>
             {
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
+                    _peekWindow?.HidePeek();
                     _omniSearchWindow?.HideSearch();
                     if (!_taskbarManager.TryGetBinTaskbarAnchorPoint(bin.Id, out System.Drawing.Point anchorPt))
                     {
@@ -272,6 +292,7 @@ namespace WinBins
             {
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
+                    _peekWindow?.HidePeek();
                     _popupWindow?.HidePopup();
                     _omniSearchWindow?.ToggleSearch();
                 }));
@@ -292,6 +313,7 @@ namespace WinBins
 
             _taskbarManager.SyncAllBins();
             _runningAppsManager.SyncRunningWindows();
+            _indicatorOverlayManager.SyncIndicators();
             _hotkeyManager.SyncHotkeys(_configService.Current?.Bins, _configService.Current?.GlobalSearchHotkey);
             InitializeSystemTray();
             StartIpcServer();
@@ -440,6 +462,7 @@ namespace WinBins
                 BinGroup bin = FindBin(binId);
                 if (bin != null)
                 {
+                    _peekWindow?.HidePeek();
                     if (isInitialStartup)
                         _popupWindow.ShowForBin(bin, new System.Drawing.Point(x, y));
                     else
@@ -561,9 +584,15 @@ namespace WinBins
             _trayDrawingIcon?.Dispose();
 
             _hotkeyManager?.Dispose();
+            _indicatorOverlayManager?.Dispose();
             _runningAppsManager?.Dispose();
             _taskbarManager?.Dispose();
             _iconService?.Dispose();
+
+            if (_peekWindow != null)
+            {
+                _peekWindow.Close();
+            }
 
             if (_omniSearchWindow != null)
             {

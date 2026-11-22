@@ -77,6 +77,8 @@ namespace WinBins.Views
             public BinItem Item;
             public int OriginalIndex;
             public Border TileBorder;
+            public Brush IdleBackground;
+            public Brush IdleBorderBrush;
         }
 
         public string CurrentBinId => _currentBin?.Id;
@@ -837,6 +839,26 @@ namespace WinBins.Views
             _emptyStatePanel.Visibility = Visibility.Collapsed;
             _gridScroll.Visibility = Visibility.Visible;
 
+            // Single-pass lookup of open windows for all items in this Bin
+            var runningByItem = new Dictionary<BinItem, List<RunningWindowEntry>>();
+            if (_runningAppsManager != null)
+            {
+                foreach (BinRunningAppSummary summary in _runningAppsManager.GetRunningAppsForBin(_currentBin))
+                {
+                    if (summary?.Item != null && summary.Windows != null && summary.Windows.Count > 0)
+                    {
+                        runningByItem[summary.Item] = summary.Windows;
+                    }
+                }
+            }
+
+            if (_currentBin.FloatOpenAppsFirst && runningByItem.Count > 0)
+            {
+                matching = matching
+                    .OrderByDescending(m => runningByItem.ContainsKey(m.Item1))
+                    .ToList();
+            }
+
             if (hasFilter && (_selectedTileIndex < 0 || _selectedTileIndex >= matching.Count))
             {
                 _selectedTileIndex = 0;
@@ -913,6 +935,7 @@ namespace WinBins.Views
 
                     foreach (var entry in grp.Item2)
                     {
+                        runningByItem.TryGetValue(entry.Item1, out List<RunningWindowEntry> preloadedWins);
                         Border tileBorder = CreateItemTile(
                             entry.Item1,
                             entry.Item2,
@@ -926,12 +949,17 @@ namespace WinBins.Views
                             lineHeight,
                             labelMaxH,
                             iconTopPad,
-                            iconLabelGap);
+                            iconLabelGap,
+                            preloadedWins,
+                            out Brush idleBg,
+                            out Brush idleBorder);
                         _displayedTiles.Add(new TileEntry
                         {
                             Item = entry.Item1,
                             OriginalIndex = entry.Item2,
-                            TileBorder = tileBorder
+                            TileBorder = tileBorder,
+                            IdleBackground = idleBg,
+                            IdleBorderBrush = idleBorder
                         });
                         secGrid.Children.Add(tileBorder);
                         runningDisplayIdx++;
@@ -948,6 +976,7 @@ namespace WinBins.Views
                 {
                     BinItem item = matching[displayIdx].Item1;
                     int originalIndex = matching[displayIdx].Item2;
+                    runningByItem.TryGetValue(item, out List<RunningWindowEntry> preloadedWins);
                     Border tileBorder = CreateItemTile(
                         item,
                         originalIndex,
@@ -961,13 +990,18 @@ namespace WinBins.Views
                         lineHeight,
                         labelMaxH,
                         iconTopPad,
-                        iconLabelGap);
+                        iconLabelGap,
+                        preloadedWins,
+                        out Brush idleBg,
+                        out Brush idleBorder);
 
                     _displayedTiles.Add(new TileEntry
                     {
                         Item = item,
                         OriginalIndex = originalIndex,
-                        TileBorder = tileBorder
+                        TileBorder = tileBorder,
+                        IdleBackground = idleBg,
+                        IdleBorderBrush = idleBorder
                     });
                     _itemsGrid.Children.Add(tileBorder);
                 }
@@ -983,10 +1017,11 @@ namespace WinBins.Views
             Brush binAccent = FluentTheme.GetEffectiveAccentBrush(_currentBin?.AccentColorHex);
             for (int i = 0; i < _displayedTiles.Count; i++)
             {
-                Border b = _displayedTiles[i].TileBorder;
+                TileEntry entry = _displayedTiles[i];
+                Border b = entry.TileBorder;
                 bool selected = (i == _selectedTileIndex);
-                b.Background = selected ? FluentTheme.CardSelectedBg : Brushes.Transparent;
-                b.BorderBrush = selected ? binAccent : Brushes.Transparent;
+                b.Background = selected ? FluentTheme.CardSelectedBg : (entry.IdleBackground ?? Brushes.Transparent);
+                b.BorderBrush = selected ? binAccent : (entry.IdleBorderBrush ?? Brushes.Transparent);
             }
         }
 
@@ -1003,12 +1038,24 @@ namespace WinBins.Views
             double lineHeight,
             double labelMaxH,
             double iconTopPad,
-            double iconLabelGap)
+            double iconLabelGap,
+            List<RunningWindowEntry> preloadedWindows,
+            out Brush idleBgOut,
+            out Brush idleBorderOut)
         {
             Brush binAccent = FluentTheme.GetEffectiveAccentBrush(_currentBin?.AccentColorHex);
-            List<RunningWindowEntry> runningWindows = _runningAppsManager?.GetRunningWindowsForItem(item) ?? new List<RunningWindowEntry>();
+            List<RunningWindowEntry> runningWindows = preloadedWindows ?? (_runningAppsManager?.GetRunningWindowsForItem(item) ?? new List<RunningWindowEntry>());
             bool isRunning = runningWindows.Count > 0;
-            bool wasActiveApp = isRunning && runningWindows.Any(w => w.Hwnd == _priorForegroundHwnd && !w.IsMinimized);
+            bool wasActiveApp = isRunning && runningWindows.Any(w => (w.Hwnd == _priorForegroundHwnd || w.IsForeground) && !w.IsMinimized);
+
+            Brush idleBg = isRunning
+                ? FluentTheme.GetTintedPillBgBrush(_currentBin?.AccentColorHex, wasActiveApp ? (byte)34 : (byte)20)
+                : Brushes.Transparent;
+            Brush idleBorder = isRunning
+                ? FluentTheme.GetTintedPillBgBrush(_currentBin?.AccentColorHex, wasActiveApp ? (byte)108 : (byte)56)
+                : Brushes.Transparent;
+            idleBgOut = idleBg;
+            idleBorderOut = idleBorder;
 
             string targetExpanded = Environment.ExpandEnvironmentVariables((item.TargetPath ?? string.Empty).Trim());
             bool isFolder = item.Kind == BinItemKind.Folder || (!string.IsNullOrEmpty(targetExpanded) && Directory.Exists(targetExpanded));
@@ -1040,8 +1087,8 @@ namespace WinBins.Views
             {
                 Width = tileW,
                 Height = tileH,
-                Background = Brushes.Transparent,
-                BorderBrush = Brushes.Transparent,
+                Background = idleBg,
+                BorderBrush = idleBorder,
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(6),
                 Padding = new Thickness(0),
@@ -1080,6 +1127,33 @@ namespace WinBins.Views
             };
             RenderOptions.SetBitmapScalingMode(iconImg, BitmapScalingMode.HighQuality);
             iconWrap.Children.Add(iconImg);
+
+            if (runningWindows.Count > 1)
+            {
+                iconWrap.Children.Add(new Border
+                {
+                    MinWidth = 15,
+                    Height = 15,
+                    CornerRadius = new CornerRadius(7.5),
+                    Background = binAccent,
+                    BorderBrush = FluentTheme.FlyoutBg,
+                    BorderThickness = new Thickness(1.2),
+                    Padding = new Thickness(3.5, 0, 3.5, 0),
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Top,
+                    Margin = new Thickness(0, -3, -5, 0),
+                    IsHitTestVisible = false,
+                    Child = new TextBlock
+                    {
+                        Text = runningWindows.Count > 9 ? "9+" : runningWindows.Count.ToString(),
+                        FontSize = 9,
+                        FontWeight = FontWeights.Bold,
+                        Foreground = FluentTheme.AccentInkBrush,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                });
+            }
 
             if (item.RunAsAdmin)
             {
@@ -1133,11 +1207,11 @@ namespace WinBins.Views
                 // Windows 11 taskbar running pill indicator anchored at the bottom edge
                 var runningPill = new Border
                 {
-                    Width = (wasActiveApp || runningWindows.Count > 1) ? 16 : 8,
-                    Height = 3.2,
-                    CornerRadius = new CornerRadius(1.6),
+                    Width = wasActiveApp ? 18 : (runningWindows.Count > 1 ? 14 : 10),
+                    Height = 3.4,
+                    CornerRadius = new CornerRadius(1.7),
                     Background = binAccent,
-                    Opacity = wasActiveApp ? 1.0 : 0.78,
+                    Opacity = wasActiveApp ? 1.0 : 0.90,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Bottom,
                     Margin = new Thickness(0, 0, 0, 2),
@@ -1193,15 +1267,22 @@ namespace WinBins.Views
             tile.MouseEnter += (_, __) =>
             {
                 if (_selectedTileIndex != displayIdx)
-                    tile.Background = FluentTheme.SubtleHoverBg;
+                {
+                    tile.Background = isRunning
+                        ? FluentTheme.GetTintedPillBgBrush(_currentBin?.AccentColorHex, 48)
+                        : FluentTheme.SubtleHoverBg;
+                    tile.BorderBrush = isRunning
+                        ? FluentTheme.GetTintedPillBgBrush(_currentBin?.AccentColorHex, 118)
+                        : Brushes.Transparent;
+                }
                 if (peekBtn != null)
                     peekBtn.Opacity = 1;
             };
             tile.MouseLeave += (_, __) =>
             {
                 bool selected = (_selectedTileIndex == displayIdx);
-                tile.Background = selected ? FluentTheme.CardSelectedBg : Brushes.Transparent;
-                tile.BorderBrush = selected ? binAccent : Brushes.Transparent;
+                tile.Background = selected ? FluentTheme.CardSelectedBg : idleBg;
+                tile.BorderBrush = selected ? binAccent : idleBorder;
                 if (peekBtn != null)
                     peekBtn.Opacity = 0;
             };
@@ -1376,14 +1457,14 @@ namespace WinBins.Views
             tile.DragLeave += (s, e) =>
             {
                 bool selected = (_selectedTileIndex == displayIdx);
-                tile.BorderBrush = selected ? binAccent : Brushes.Transparent;
-                tile.Background = selected ? FluentTheme.CardSelectedBg : Brushes.Transparent;
+                tile.BorderBrush = selected ? binAccent : idleBorder;
+                tile.Background = selected ? FluentTheme.CardSelectedBg : idleBg;
             };
 
             tile.Drop += (s, e) =>
             {
-                tile.BorderBrush = Brushes.Transparent;
-                tile.Background = Brushes.Transparent;
+                tile.BorderBrush = idleBorder;
+                tile.Background = idleBg;
                 ShowDropHint(null, highlightOuterBorder: false);
 
                 if (e.Data.GetDataPresent(InternalTileDragFormat))
