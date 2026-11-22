@@ -162,10 +162,17 @@ namespace WinBins.Views
 
         public static void ApplyTheme(BinThemeMode mode, bool useAcrylicFlyout = true)
         {
+            ApplyTheme(mode, useAcrylicFlyout ? BinBackdropStyle.Acrylic : BinBackdropStyle.Solid, 82);
+        }
+
+        public static void ApplyTheme(BinThemeMode mode, BinBackdropStyle backdrop, int opacityPercent = 82)
+        {
             bool useLight = mode == BinThemeMode.Light ||
                             (mode == BinThemeMode.System && IsWindowsAppLightMode());
 
             IsLightThemeActive = useLight;
+            int clampedPct = Math.Max(15, Math.Min(100, opacityPercent));
+            byte solidAlpha = (byte)Math.Round(255.0 * clampedPct / 100.0);
 
             if (useLight)
             {
@@ -173,7 +180,8 @@ namespace WinBins.Views
                 SetThemeBrush(WindowBg, "#F3F3F3");
                 SetThemeBrush(SidebarBg, "#F3F3F3");
                 SetThemeBrush(LayerBg, "#FBFBFB");
-                SetThemeBrush(PopupBg, useAcrylicFlyout ? "#CCF9F9F9" : "#F9F9F9");
+                // In Acrylic/Mica modes, keep WPF surface nearly transparent so DWM/AccentPolicy drives true translucency
+                SetThemeBrush(PopupBg, backdrop == BinBackdropStyle.Solid ? $"#{solidAlpha:X2}F6F6F6" : "#01FFFFFF");
                 SetThemeBrush(FlyoutBg, "#F9F9F9");
 
                 SetThemeBrush(CardBg, "#B8FFFFFF");
@@ -207,7 +215,7 @@ namespace WinBins.Views
                 SetThemeBrush(WindowBg, "#202020");
                 SetThemeBrush(SidebarBg, "#202020");
                 SetThemeBrush(LayerBg, "#272727");
-                SetThemeBrush(PopupBg, useAcrylicFlyout ? "#BF282828" : "#2C2C2C");
+                SetThemeBrush(PopupBg, backdrop == BinBackdropStyle.Solid ? $"#{solidAlpha:X2}242424" : "#01000000");
                 SetThemeBrush(FlyoutBg, "#2C2C2C");
 
                 SetThemeBrush(CardBg, "#0DFFFFFF");
@@ -248,9 +256,37 @@ namespace WinBins.Views
                 return;
 
             resources[typeof(ScrollBar)] = CreateWin11ScrollBarStyle();
+            resources[typeof(ScrollViewer)] = CreateGentleScrollViewerStyle();
             resources[typeof(ToolTip)] = CreateWin11ToolTipStyle();
             resources[typeof(ContextMenu)] = CreateWin11ContextMenuStyle();
             resources[typeof(MenuItem)] = CreateWin11MenuItemStyle();
+        }
+
+        private static Style CreateGentleScrollViewerStyle()
+        {
+            var style = new Style(typeof(ScrollViewer));
+            style.Setters.Add(new EventSetter(
+                UIElement.PreviewMouseWheelEvent,
+                new MouseWheelEventHandler(OnScrollViewerPreviewMouseWheel)));
+            return style;
+        }
+
+        private static void OnScrollViewerPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            if (e.Handled || e.Delta == 0)
+                return;
+
+            if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+                return;
+
+            if (!(sender is ScrollViewer sv) || sv.ScrollableHeight <= 0)
+                return;
+
+            // Gentle, controlled vertical scroll (~26px per standard 120-delta notch, proportional for touchpads)
+            double deltaPx = -e.Delta * 0.22;
+            double target = Math.Max(0.0, Math.Min(sv.ScrollableHeight, sv.VerticalOffset + deltaPx));
+            sv.ScrollToVerticalOffset(target);
+            e.Handled = true;
         }
 
         private static Style CreateWin11ScrollBarStyle()
@@ -781,6 +817,77 @@ namespace WinBins.Views
 
             cb.Template = template;
             return cb;
+        }
+
+        /// <summary>
+        /// Creates a sleek Windows 11 WinUI 3 Slider with a rounded pill track, accent fill, and circular thumb.
+        /// </summary>
+        public static Slider CreateSlider(double min, double max, double value, double tickFrequency = 5)
+        {
+            var slider = new Slider
+            {
+                Minimum = min,
+                Maximum = max,
+                Value = value,
+                TickFrequency = tickFrequency,
+                IsSnapToTickEnabled = true,
+                IsMoveToPointEnabled = true,
+                Cursor = Cursors.Hand,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            const string xaml = @"
+<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+                 xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'
+                 TargetType='{x:Type Slider}'>
+    <Grid VerticalAlignment='Center' Height='22' Background='Transparent'>
+        <Border Height='4' CornerRadius='2' Background='#38888888' VerticalAlignment='Center'/>
+        <Track x:Name='PART_Track' VerticalAlignment='Center'>
+            <Track.DecreaseRepeatButton>
+                <RepeatButton Command='Slider.DecreaseLarge' Focusable='False'>
+                    <RepeatButton.Template>
+                        <ControlTemplate TargetType='RepeatButton'>
+                            <Border Height='4' CornerRadius='2,0,0,2' Background='#60CDFF' VerticalAlignment='Center'/>
+                        </ControlTemplate>
+                    </RepeatButton.Template>
+                </RepeatButton>
+            </Track.DecreaseRepeatButton>
+            <Track.IncreaseRepeatButton>
+                <RepeatButton Command='Slider.IncreaseLarge' Focusable='False'>
+                    <RepeatButton.Template>
+                        <ControlTemplate TargetType='RepeatButton'>
+                            <Border Height='4' Background='Transparent' VerticalAlignment='Center'/>
+                        </ControlTemplate>
+                    </RepeatButton.Template>
+                </RepeatButton>
+            </Track.IncreaseRepeatButton>
+            <Track.Thumb>
+                <Thumb Width='18' Height='18'>
+                    <Thumb.Template>
+                        <ControlTemplate TargetType='Thumb'>
+                            <Grid>
+                                <Ellipse Width='18' Height='18' Fill='#3A3A3A' Stroke='#55FFFFFF' StrokeThickness='1'/>
+                                <Ellipse x:Name='InnerDot' Width='10' Height='10' Fill='#60CDFF'/>
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property='IsMouseOver' Value='True'>
+                                    <Setter TargetName='InnerDot' Property='Width' Value='12'/>
+                                    <Setter TargetName='InnerDot' Property='Height' Value='12'/>
+                                </Trigger>
+                                <Trigger Property='IsDragging' Value='True'>
+                                    <Setter TargetName='InnerDot' Property='Width' Value='8'/>
+                                    <Setter TargetName='InnerDot' Property='Height' Value='8'/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Thumb.Template>
+                </Thumb>
+            </Track.Thumb>
+        </Track>
+    </Grid>
+</ControlTemplate>";
+            slider.Template = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(xaml);
+            return slider;
         }
 
         /// <summary>

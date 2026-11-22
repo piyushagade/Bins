@@ -572,6 +572,13 @@ namespace WinBins.Services
                 return;
             }
 
+            var currentBtnAnchor = new System.Drawing.Point(
+                (int)Math.Round(matchedRect.Left + matchedRect.Width / 2.0),
+                (int)Math.Round(matchedRect.Top + matchedRect.Height / 2.0));
+
+            // Always suppress the native Windows 11 taskbar button title tooltip while hovering any Bin icon
+            Win32Interop.DismissTaskbarThumbnailWindows(currentBtnAnchor, cancelTrayHoverTooltip: true);
+
             if (!string.Equals(_hoveredBinId, matchedBinId, StringComparison.OrdinalIgnoreCase))
             {
                 _hoveredBinId = matchedBinId;

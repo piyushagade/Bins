@@ -1,0 +1,30 @@
+# WinGet Manifest Template (Singleton v1.6) for Bins for Windows 11
+# Replace InstallerUrl and InstallerSha256 with the published GitHub Release asset before submitting to microsoft/winget-pkgs.
+
+PackageIdentifier: PiyushAgade.Bins
+PackageVersion: 1.5.0
+PackageLocale: en-US
+Publisher: Piyush Agade
+PublisherUrl: https://github.com/piyushagade/Bins
+PublisherSupportUrl: https://github.com/piyushagade/Bins/issues
+PackageName: Bins for Windows 11
+PackageUrl: https://github.com/piyushagade/Bins
+License: MIT
+ShortDescription: Native Windows 11 grouped taskbar icon launcher with mosaic icons, Smart Live Folders, profiles, and WinUI 3 flyouts.
+Tags:
+  - taskbar
+  - launcher
+  - productivity
+  - windows-11
+  - organizer
+Installers:
+  - Architecture: x64
+    Scope: user
+    InstallerType: inno
+    InstallerUrl: https://github.com/piyushagade/Bins/releases/download/v1.5.0/Bins-Setup-1.5.0-x64.exe
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+    InstallerSwitches:
+      Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+      SilentWithProgress: /SILENT /SUPPRESSMSGBOXES /NORESTART
+ManifestType: singleton
+ManifestVersion: 1.6.0

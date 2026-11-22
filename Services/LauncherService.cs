@@ -48,6 +48,25 @@ namespace WinBins.Services
                     return ExecuteSystemAction(item, elevate);
                 }
 
+                if (item.Kind == BinItemKind.Snippet || BinItem.IsSnippet(target))
+                {
+                    string text = item.Arguments ?? string.Empty;
+                    try
+                    {
+                        Clipboard.SetText(text);
+                        return true;
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                }
+
+                if (item.Kind == BinItemKind.SubBin || BinItem.IsSubBin(target))
+                {
+                    return false; // Handled inline by BinPopupWindow / Program
+                }
+
                 if (BinItem.IsWebUrl(target))
                 {
                     Process.Start(new ProcessStartInfo
@@ -242,22 +261,175 @@ namespace WinBins.Services
                     return true;
                 }
 
+                case "mute":
+                    Win32Interop.SendMediaKey(Win32Interop.VK_VOLUME_MUTE);
+                    return true;
+
+                case "playpause":
+                    Win32Interop.SendMediaKey(Win32Interop.VK_MEDIA_PLAY_PAUSE);
+                    return true;
+
+                case "nexttrack":
+                    Win32Interop.SendMediaKey(Win32Interop.VK_MEDIA_NEXT_TRACK);
+                    return true;
+
+                case "prevtrack":
+                    Win32Interop.SendMediaKey(Win32Interop.VK_MEDIA_PREV_TRACK);
+                    return true;
+
+                case "toggletheme":
+                    return ToggleWindowsDarkLightTheme();
+
+                case "clearclipboard":
+                    try { Clipboard.Clear(); return true; } catch { return false; }
+
+                case "soundsettings":
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "ms-settings:sound",
+                        UseShellExecute = true
+                    });
+                    return true;
+
                 default:
                     return false;
             }
         }
 
+        private static bool ToggleWindowsDarkLightTheme()
+        {
+            try
+            {
+                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", writable: true))
+                {
+                    if (key == null)
+                        return false;
+
+                    int current = Convert.ToInt32(key.GetValue("AppsUseLightTheme", 0));
+                    int next = current == 0 ? 1 : 0;
+                    key.SetValue("AppsUseLightTheme", next, Microsoft.Win32.RegistryValueKind.DWord);
+                    key.SetValue("SystemUsesLightTheme", next, Microsoft.Win32.RegistryValueKind.DWord);
+                }
+                Win32Interop.BroadcastThemeChange();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static bool IsItemTargetBroken(BinItem item, AppConfig config = null)
+        {
+            if (item == null || item.IsLiveFolderItem)
+                return false;
+
+            string raw = (item.TargetPath ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(raw))
+                return true;
+
+            if (item.Kind == BinItemKind.SystemCommand || BinItem.IsSystemCommand(raw) ||
+                item.Kind == BinItemKind.WebUrl || BinItem.IsWebUrl(raw) ||
+                item.Kind == BinItemKind.PackagedApp || BinItem.IsPackagedApp(raw) ||
+                item.Kind == BinItemKind.Snippet || BinItem.IsSnippet(raw))
+            {
+                return false;
+            }
+
+            if (item.Kind == BinItemKind.SubBin || BinItem.IsSubBin(raw))
+            {
+                if (config?.Bins == null)
+                    return false;
+                string subId = BinItem.GetSubBinId(raw);
+                return !config.Bins.Any(b => string.Equals(b.Id, subId, StringComparison.OrdinalIgnoreCase));
+            }
+
+            try
+            {
+                string expanded = Environment.ExpandEnvironmentVariables(raw.Trim('"'));
+                if (File.Exists(expanded) || Directory.Exists(expanded))
+                    return false;
+                return true;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        public static HashSet<string> FindDuplicateItemIds(BinGroup bin)
+        {
+            var duplicates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (bin?.Items == null || bin.Items.Count < 2)
+                return duplicates;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (BinItem item in bin.Items)
+            {
+                if (item == null || string.IsNullOrWhiteSpace(item.TargetPath))
+                    continue;
+
+                string key = item.Kind == BinItemKind.Snippet
+                    ? "snippet|" + (item.Name ?? string.Empty).Trim() + "|" + (item.Arguments ?? string.Empty).Trim()
+                    : Environment.ExpandEnvironmentVariables(item.TargetPath.Trim().Trim('"')).TrimEnd('\\') + "|" + (item.Arguments ?? string.Empty).Trim();
+
+                if (!seen.Add(key))
+                {
+                    duplicates.Add(item.Id);
+                }
+            }
+
+            return duplicates;
+        }
+
+        private static bool MatchesLiveFolderFilter(string fileName, string filterSpec)
+        {
+            if (string.IsNullOrWhiteSpace(filterSpec))
+                return true;
+
+            string[] patterns = filterSpec.Split(new[] { ';', ',', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (patterns.Length == 0)
+                return true;
+
+            foreach (string rawPat in patterns)
+            {
+                string pat = rawPat.Trim();
+                if (string.IsNullOrEmpty(pat) || pat == "*" || pat == "*.*")
+                    return true;
+
+                // Allow shorthand like ".pdf" or "pdf" as "*.pdf"
+                if (!pat.Contains("*") && !pat.Contains("?"))
+                {
+                    pat = pat.StartsWith(".", StringComparison.Ordinal) ? ("*" + pat) : ("*." + pat);
+                }
+
+                string regexPat = "^" + System.Text.RegularExpressions.Regex.Escape(pat)
+                    .Replace("\\*", ".*")
+                    .Replace("\\?", ".") + "$";
+                if (System.Text.RegularExpressions.Regex.IsMatch(fileName, regexPat, System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
         public static List<BinItem> GetLiveFolderItems(BinGroup bin, int? maxOverride = null)
         {
             var list = new List<BinItem>();
-            if (bin == null || string.IsNullOrWhiteSpace(bin.LiveFolderPath))
+            if (bin == null)
                 return list;
 
-            string expanded = Environment.ExpandEnvironmentVariables(bin.LiveFolderPath.Trim().Trim('"'));
-            if (!Directory.Exists(expanded))
+            bool recentMode = bin.LiveFolderRecentMode;
+            string expanded = recentMode
+                ? Environment.GetFolderPath(Environment.SpecialFolder.Recent)
+                : Environment.ExpandEnvironmentVariables((bin.LiveFolderPath ?? string.Empty).Trim().Trim('"'));
+
+            if (string.IsNullOrWhiteSpace(expanded) || !Directory.Exists(expanded))
                 return list;
 
             int cap = Math.Max(1, Math.Min(48, maxOverride ?? bin.LiveFolderMaxItems));
+            string filterSpec = bin.LiveFolderFilter;
 
             try
             {
@@ -270,6 +442,11 @@ namespace WinBins.Services
                         string n = fsi.Name;
                         if (string.Equals(n, "desktop.ini", StringComparison.OrdinalIgnoreCase) ||
                             string.Equals(n, "thumbs.db", StringComparison.OrdinalIgnoreCase))
+                            return false;
+                        if (recentMode && !n.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
+                            return false;
+                        string matchName = recentMode ? Path.GetFileNameWithoutExtension(n) : n;
+                        if (!MatchesLiveFolderFilter(matchName, filterSpec))
                             return false;
                         return true;
                     });
@@ -289,13 +466,34 @@ namespace WinBins.Services
                         break;
                 }
 
-                foreach (FileSystemInfo fsi in entries.Take(cap))
+                var seenTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (FileSystemInfo fsi in entries)
                 {
-                    BinItem liveItem = BinItem.FromPath(fsi.FullName);
-                    liveItem.Id = "live_" + fsi.FullName.GetHashCode().ToString("x8");
+                    if (list.Count >= cap)
+                        break;
+
+                    string targetPath = fsi.FullName;
+                    string displayName = null;
+
+                    if (recentMode && targetPath.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!ShortcutService.TryResolveShortcutTarget(targetPath, out string resolved, out _))
+                            continue;
+                        if (string.IsNullOrWhiteSpace(resolved) || (!File.Exists(resolved) && !Directory.Exists(resolved)))
+                            continue;
+                        if (!seenTargets.Add(resolved))
+                            continue;
+                        targetPath = resolved;
+                        displayName = Path.GetFileName(resolved.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                    }
+
+                    BinItem liveItem = BinItem.FromPath(targetPath);
+                    if (!string.IsNullOrWhiteSpace(displayName))
+                        liveItem.Name = displayName;
+                    liveItem.Id = "live_" + targetPath.GetHashCode().ToString("x8");
                     liveItem.IsLiveFolderItem = true;
                     liveItem.IncludeInOpenAll = false;
-                    liveItem.Section = "Live Folder";
+                    liveItem.Section = recentMode ? "Recent Files" : "Live Folder";
                     list.Add(liveItem);
                 }
             }

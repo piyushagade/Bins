@@ -103,12 +103,48 @@ namespace WinBins.Services
                         resourceIndex = 0;
                         cacheKey = $"sys|powershell|{sourcePath}|0";
                         return;
+                    case "mute":
+                    case "playpause":
+                    case "nexttrack":
+                    case "prevtrack":
+                    case "toggletheme":
+                    case "clearclipboard":
+                    case "soundsettings":
+                        sourcePath = "__fluent_sys__|" + action;
+                        resourceIndex = 0;
+                        cacheKey = "sys|fluent|" + action;
+                        return;
                     default:
                         sourcePath = Path.Combine(sys32, "imageres.dll");
                         resourceIndex = -114;
                         cacheKey = $"sys|default|{sourcePath}|-114";
                         return;
                 }
+            }
+
+            if (item.Kind == BinItemKind.Snippet || BinItem.IsSnippet(item.TargetPath))
+            {
+                sourcePath = "__fluent_sys__|snippet";
+                resourceIndex = 0;
+                cacheKey = "sys|fluent|snippet";
+                return;
+            }
+
+            if (item.Kind == BinItemKind.SubBin || BinItem.IsSubBin(item.TargetPath))
+            {
+                string subBinId = BinItem.GetSubBinId(item.TargetPath);
+                BinGroup targetBin = _configService?.Current?.Bins?.Find(b => string.Equals(b.Id, subBinId, StringComparison.OrdinalIgnoreCase));
+                if (targetBin != null)
+                {
+                    sourcePath = "__subbin__|" + targetBin.Id;
+                    resourceIndex = targetBin.IconRevision;
+                    cacheKey = $"subbin|{targetBin.Id}|{ComputeIconSignature(targetBin)}";
+                    return;
+                }
+                sourcePath = "__fluent_sys__|subbin";
+                resourceIndex = 0;
+                cacheKey = "sys|fluent|subbin";
+                return;
             }
 
             if (item.Kind == BinItemKind.WebUrl || BinItem.IsWebUrl(item.TargetPath))
@@ -159,6 +195,17 @@ namespace WinBins.Services
                     return CreateSystemActionBitmap(sysAction);
                 }
 
+                if (sourcePath.StartsWith("__subbin__|", StringComparison.Ordinal))
+                {
+                    string subBinId = sourcePath.Substring("__subbin__|".Length);
+                    BinGroup targetBin = _configService?.Current?.Bins?.Find(b => string.Equals(b.Id, subBinId, StringComparison.OrdinalIgnoreCase));
+                    if (targetBin != null)
+                    {
+                        return CreateBinBitmap(targetBin, allowSubBinRecursion: false);
+                    }
+                    return CreateSystemActionBitmap("subbin");
+                }
+
                 Bitmap extracted = Win32Interop.ExtractHighResIconBitmap(sourcePath, resourceIndex, 256);
                 return extracted ?? CreateFallbackItemBitmap();
             });
@@ -203,14 +250,18 @@ namespace WinBins.Services
             }
         }
 
-        private List<Bitmap> CollectMosaicSubIcons(BinGroup bin)
+        private List<Bitmap> CollectMosaicSubIcons(BinGroup bin, int maxCount = 4, bool allowSubBinRecursion = true)
         {
-            var subIcons = new List<Bitmap>(4);
+            var subIcons = new List<Bitmap>(maxCount);
             if (bin?.Items != null)
             {
-                for (int i = 0; i < bin.Items.Count && subIcons.Count < 4; i++)
+                for (int i = 0; i < bin.Items.Count && subIcons.Count < maxCount; i++)
                 {
-                    Bitmap itemBmp = GetItemBitmap(bin.Items[i]);
+                    BinItem it = bin.Items[i];
+                    if (!allowSubBinRecursion && (it.Kind == BinItemKind.SubBin || BinItem.IsSubBin(it.TargetPath)))
+                        continue;
+
+                    Bitmap itemBmp = GetItemBitmap(it);
                     if (itemBmp != null)
                     {
                         subIcons.Add(itemBmp);
@@ -218,10 +269,10 @@ namespace WinBins.Services
                 }
             }
 
-            if (subIcons.Count < 4 && bin != null && !string.IsNullOrWhiteSpace(bin.LiveFolderPath))
+            if (subIcons.Count < maxCount && bin != null && (!string.IsNullOrWhiteSpace(bin.LiveFolderPath) || bin.LiveFolderRecentMode))
             {
-                List<BinItem> liveItems = LauncherService.GetLiveFolderItems(bin, 4 - subIcons.Count);
-                for (int i = 0; i < liveItems.Count && subIcons.Count < 4; i++)
+                List<BinItem> liveItems = LauncherService.GetLiveFolderItems(bin, maxCount - subIcons.Count);
+                for (int i = 0; i < liveItems.Count && subIcons.Count < maxCount; i++)
                 {
                     Bitmap liveBmp = GetItemBitmap(liveItems[i]);
                     if (liveBmp != null)
@@ -235,12 +286,14 @@ namespace WinBins.Services
         }
 
         /// <summary>
-        /// Creates the 128x128 transparent ARGB Bitmap for a BinGroup (either GridMosaic or CustomIcon).
+        /// Creates the 128x128 transparent ARGB Bitmap for a BinGroup (GridMosaic, Grid3x3, FannedStack, BadgeMonogram, or CustomIcon).
         /// </summary>
-        public Bitmap CreateBinBitmap(BinGroup bin)
+        public Bitmap CreateBinBitmap(BinGroup bin, bool allowSubBinRecursion = true)
         {
             if (bin == null)
                 return Win32Interop.CreateGroupMosaicBitmap(null);
+
+            System.Drawing.Color? tint = TryParseDrawingColor(bin.AccentColorHex);
 
             if (bin.IconMode == BinIconMode.CustomIcon && !string.IsNullOrWhiteSpace(bin.CustomIconPath))
             {
@@ -253,37 +306,51 @@ namespace WinBins.Services
                     return resized;
                 }
             }
+            else if (bin.IconMode == BinIconMode.BadgeMonogram)
+            {
+                string badge = !string.IsNullOrWhiteSpace(bin.BadgeText)
+                    ? bin.BadgeText.Trim()
+                    : DeriveDefaultMonogram(bin.Name);
+                return Win32Interop.CreateBadgeMonogramBitmap(badge, tint);
+            }
+            else if (bin.IconMode == BinIconMode.Grid3x3)
+            {
+                List<Bitmap> subIcons9 = CollectMosaicSubIcons(bin, 9, allowSubBinRecursion);
+                return Win32Interop.CreateGroupMosaic3x3Bitmap(subIcons9, bin.ShowMosaicBackplate, tint);
+            }
+            else if (bin.IconMode == BinIconMode.FannedStack)
+            {
+                List<Bitmap> subIcons3 = CollectMosaicSubIcons(bin, 3, allowSubBinRecursion);
+                return Win32Interop.CreateFannedStackBitmap(subIcons3, bin.ShowMosaicBackplate, tint);
+            }
 
-            List<Bitmap> subIcons = CollectMosaicSubIcons(bin);
-            System.Drawing.Color? tint = TryParseDrawingColor(bin.AccentColorHex);
+            List<Bitmap> subIcons = CollectMosaicSubIcons(bin, 4, allowSubBinRecursion);
             return Win32Interop.CreateGroupMosaicBitmap(subIcons, bin.ShowMosaicBackplate, tint);
+        }
+
+        private static string DeriveDefaultMonogram(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return "B";
+
+            string[] parts = name.Trim().Split(new[] { ' ', '-', '_' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2)
+                return (parts[0].Substring(0, 1) + parts[1].Substring(0, 1)).ToUpperInvariant();
+
+            string single = parts[0];
+            return single.Length >= 2 ? single.Substring(0, 2).ToUpperInvariant() : single.ToUpperInvariant();
         }
 
         /// <summary>
         /// Creates a native Win32 HICON handle for the BinGroup.
-        /// For GridMosaic mode, delegates directly to Win32Interop.CreateGroupMosaicIconHandle.
         /// Caller owns the returned HICON and must call Win32Interop.DestroyIcon when finished.
         /// </summary>
         public IntPtr CreateBinIconHandle(BinGroup bin)
         {
-            if (bin != null && bin.IconMode == BinIconMode.CustomIcon && !string.IsNullOrWhiteSpace(bin.CustomIconPath))
+            using (Bitmap bmp = CreateBinBitmap(bin))
             {
-                string resolvedCustom = ResolveCustomIconPathWithFallback(bin.CustomIconPath);
-                using (Bitmap custom = Win32Interop.ExtractHighResIconBitmap(resolvedCustom, bin.CustomIconIndex, 128))
-                {
-                    if (custom != null)
-                    {
-                        using (Bitmap sized = Win32Interop.ResizeToSquareBitmap(custom, 128))
-                        {
-                            return Win32Interop.CreateAlphaIconHandle(sized);
-                        }
-                    }
-                }
+                return Win32Interop.CreateAlphaIconHandle(bmp);
             }
-
-            List<Bitmap> subIcons = CollectMosaicSubIcons(bin);
-            System.Drawing.Color? tint = TryParseDrawingColor(bin?.AccentColorHex);
-            return Win32Interop.CreateGroupMosaicIconHandle(subIcons, bin?.ShowMosaicBackplate ?? false, tint);
         }
 
         public IntPtr CreateBinSmallIconHandle(BinGroup bin, int size = 32)
@@ -305,12 +372,20 @@ namespace WinBins.Services
                 return $"Custom|{bin.CustomIconPath}|{bin.CustomIconIndex}";
             }
 
-            var sb = new System.Text.StringBuilder(bin.ShowMosaicBackplate ? "GridPlate" : "Grid");
+            if (bin.IconMode == BinIconMode.BadgeMonogram)
+            {
+                return $"Badge|{bin.BadgeText}|{bin.Name}|{bin.AccentColorHex}";
+            }
+
+            var sb = new System.Text.StringBuilder(bin.IconMode.ToString());
+            if (bin.ShowMosaicBackplate) sb.Append("Plate");
             sb.Append('|').Append(bin.AccentColorHex ?? string.Empty);
-            sb.Append('|').Append(bin.LiveFolderPath ?? string.Empty);
+            sb.Append('|').Append(bin.LiveFolderRecentMode ? "RECENT" : (bin.LiveFolderPath ?? string.Empty));
+            sb.Append('|').Append(bin.LiveFolderFilter ?? string.Empty);
+            int maxItems = bin.IconMode == BinIconMode.Grid3x3 ? 9 : (bin.IconMode == BinIconMode.FannedStack ? 3 : 4);
             if (bin.Items != null)
             {
-                for (int i = 0; i < bin.Items.Count && i < 4; i++)
+                for (int i = 0; i < bin.Items.Count && i < maxItems; i++)
                 {
                     BinItem it = bin.Items[i];
                     sb.Append('|')
@@ -661,6 +736,24 @@ namespace WinBins.Services
                     return CreateFluentGlyphTileBitmap("\uE777", System.Drawing.Color.FromArgb(245, 16, 185, 129), System.Drawing.Color.FromArgb(245, 4, 120, 87));
                 case "shutdown":
                     return CreateFluentGlyphTileBitmap("\uE7E8", System.Drawing.Color.FromArgb(245, 239, 68, 68), System.Drawing.Color.FromArgb(245, 185, 28, 28));
+                case "mute":
+                    return CreateFluentGlyphTileBitmap("\uE74F", System.Drawing.Color.FromArgb(245, 245, 158, 11), System.Drawing.Color.FromArgb(245, 180, 83, 9));
+                case "playpause":
+                    return CreateFluentGlyphTileBitmap("\uE768", System.Drawing.Color.FromArgb(245, 34, 197, 94), System.Drawing.Color.FromArgb(245, 21, 128, 61));
+                case "nexttrack":
+                    return CreateFluentGlyphTileBitmap("\uE893", System.Drawing.Color.FromArgb(245, 14, 165, 233), System.Drawing.Color.FromArgb(245, 3, 105, 161));
+                case "prevtrack":
+                    return CreateFluentGlyphTileBitmap("\uE892", System.Drawing.Color.FromArgb(245, 14, 165, 233), System.Drawing.Color.FromArgb(245, 3, 105, 161));
+                case "toggletheme":
+                    return CreateFluentGlyphTileBitmap("\uE793", System.Drawing.Color.FromArgb(245, 99, 102, 241), System.Drawing.Color.FromArgb(245, 67, 56, 202));
+                case "clearclipboard":
+                    return CreateFluentGlyphTileBitmap("\uE77F", System.Drawing.Color.FromArgb(245, 236, 72, 153), System.Drawing.Color.FromArgb(245, 190, 24, 93));
+                case "soundsettings":
+                    return CreateFluentGlyphTileBitmap("\uE767", System.Drawing.Color.FromArgb(245, 6, 182, 212), System.Drawing.Color.FromArgb(245, 14, 116, 144));
+                case "snippet":
+                    return CreateFluentGlyphTileBitmap("\uE8C8", System.Drawing.Color.FromArgb(245, 168, 85, 247), System.Drawing.Color.FromArgb(245, 126, 34, 206));
+                case "subbin":
+                    return CreateFluentGlyphTileBitmap("\uE8B7", System.Drawing.Color.FromArgb(245, 59, 130, 246), System.Drawing.Color.FromArgb(245, 37, 99, 235));
                 default:
                     return CreateFluentGlyphTileBitmap("\uE770", System.Drawing.Color.FromArgb(245, 71, 85, 105), System.Drawing.Color.FromArgb(245, 51, 65, 85));
             }

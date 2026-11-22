@@ -57,6 +57,10 @@ namespace WinBins.Views
         private bool _openedByHover;
         private int _hoverOutsideStartTick;
 
+        private readonly Stack<BinGroup> _subBinStack = new Stack<BinGroup>();
+        private Button _backBtn;
+        private System.Drawing.Point _lastAnchorScreenPx;
+
         private BinGroup _currentBin;
         private IntPtr _priorForegroundHwnd;
         private bool _suppressDeactivateClose;
@@ -206,6 +210,12 @@ namespace WinBins.Views
                 Background = Brushes.Transparent
             };
 
+            _backBtn = FluentTheme.CreateIconButton("\uE72B", "Back to parent Bin (Backspace)", size: 26, iconSize: 11.5);
+            _backBtn.Margin = new Thickness(0, 0, 6, 0);
+            _backBtn.Visibility = Visibility.Collapsed;
+            _backBtn.Click += (_, __) => NavigateBackSubBin();
+            _titleGroup.Children.Add(_backBtn);
+
             _flyoutHeaderIcon = new Image
             {
                 Width = 18,
@@ -255,8 +265,7 @@ namespace WinBins.Views
             {
                 _filterText = string.Empty;
                 _selectedTileIndex = -1;
-                RebuildContent();
-                UpdateLayout();
+                RebuildAndRealign();
             };
             DockPanel.SetDock(clearFilterBtn, Dock.Right);
             filterDock.Children.Add(clearFilterBtn);
@@ -283,21 +292,6 @@ namespace WinBins.Views
             filterDock.Children.Add(_filterTextBlock);
             _filterBar.Child = filterDock;
             mainStack.Children.Add(_filterBar);
-
-            // Named section pill tabs bar (shown when Bin has categorized items and SectionLayout == Tabs)
-            _sectionTabsPanel = new StackPanel
-            {
-                Orientation = Orientation.Horizontal
-            };
-            _sectionTabsScroll = new ScrollViewer
-            {
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Margin = new Thickness(2, 0, 2, 6),
-                Visibility = Visibility.Collapsed,
-                Content = _sectionTabsPanel
-            };
-            mainStack.Children.Add(_sectionTabsScroll);
 
             // Empty state panel
             _emptyStatePanel = new Border
@@ -345,9 +339,27 @@ namespace WinBins.Views
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 MaxHeight = 420,
+                FocusVisualStyle = null,
                 Content = _contentHostStack
             };
             mainStack.Children.Add(_gridScroll);
+
+            // Named section pill tabs bar anchored at the bottom (closest to the taskbar Bin icon)
+            _sectionTabsPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal
+            };
+            _sectionTabsScroll = new ScrollViewer
+            {
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Focusable = false,
+                FocusVisualStyle = null,
+                Margin = new Thickness(2, 8, 2, 0),
+                Visibility = Visibility.Collapsed,
+                Content = _sectionTabsPanel
+            };
+            mainStack.Children.Add(_sectionTabsScroll);
 
             // Non-blocking contextual drop hint banner (keeps all tiles visible so user can drop onto an App or Folder tile!)
             _dropHintBanner = new Border
@@ -391,12 +403,13 @@ namespace WinBins.Views
             if (hwnd == IntPtr.Zero)
                 return;
 
-            bool useAcrylic = _configService.Current?.UseAcrylicFlyout ?? true;
-            Win32Interop.ApplyWindows11WindowStyling(
+            BinBackdropStyle backdrop = _configService.Current?.FlyoutBackdrop ?? BinBackdropStyle.Acrylic;
+            int opacity = _configService.Current?.FlyoutOpacityPercent ?? 82;
+            Win32Interop.ApplyFlyoutBackdropAndOpacity(
                 hwnd,
-                useMica: false,
-                useAcrylic: useAcrylic,
-                forceDarkMode: !FluentTheme.IsLightThemeActive);
+                (int)backdrop,
+                opacity,
+                FluentTheme.IsLightThemeActive);
         }
 
         public void ToggleAtScreenPoint(BinGroup bin, System.Drawing.Point anchorScreenPx)
@@ -450,6 +463,10 @@ namespace WinBins.Views
                 _priorForegroundHwnd = currentFg;
             }
 
+            Win32Interop.DismissTaskbarThumbnailWindows(anchorScreenPx, cancelTrayHoverTooltip: true);
+
+            _subBinStack.Clear();
+            _lastAnchorScreenPx = anchorScreenPx;
             _currentBin = bin;
             _filterText = string.Empty;
             _activeSectionTab = null;
@@ -571,8 +588,17 @@ namespace WinBins.Views
             if (IsVisible && bin != null && string.Equals(_currentBin?.Id, bin.Id, StringComparison.OrdinalIgnoreCase))
             {
                 _currentBin = bin;
-                RebuildContent();
-                UpdateLayout();
+                RebuildAndRealign();
+            }
+        }
+
+        private void RebuildAndRealign()
+        {
+            RebuildContent();
+            UpdateLayout();
+            if (IsVisible)
+            {
+                PositionAboveTaskbarAnchor(_lastAnchorScreenPx);
             }
         }
 
@@ -612,13 +638,16 @@ namespace WinBins.Views
             out double baseIconTopPad,
             out double baseIconLabelGap)
         {
+            int prefIconSize = _configService.Current?.TileIconSize ?? 32;
+            double scale = prefIconSize / 32.0;
+
             BinFlyoutDensity density = _currentBin?.Density ?? BinFlyoutDensity.Normal;
             switch (density)
             {
                 case BinFlyoutDensity.Compact:
-                    iconSize = 28;
-                    baseTileW = 64;
-                    baseTileH = 74;
+                    iconSize = Math.Round(28 * scale);
+                    baseTileW = Math.Round(64 * Math.Max(0.9, scale));
+                    baseTileH = Math.Round(74 + (iconSize - 28));
                     fontSize = 10.5;
                     lineHeight = 13.5;
                     labelMaxH = 27.0;
@@ -627,9 +656,9 @@ namespace WinBins.Views
                     break;
 
                 case BinFlyoutDensity.Spacious:
-                    iconSize = 44;
-                    baseTileW = 94;
-                    baseTileH = 102;
+                    iconSize = Math.Round(44 * scale);
+                    baseTileW = Math.Round(94 * Math.Max(0.9, scale));
+                    baseTileH = Math.Round(102 + (iconSize - 44));
                     fontSize = 12.0;
                     lineHeight = 16.0;
                     labelMaxH = 32.0;
@@ -638,9 +667,9 @@ namespace WinBins.Views
                     break;
 
                 default:
-                    iconSize = 36;
-                    baseTileW = 78;
-                    baseTileH = 90;
+                    iconSize = Math.Round(36 * scale);
+                    baseTileW = Math.Round(78 * Math.Max(0.9, scale));
+                    baseTileH = Math.Round(90 + (iconSize - 36));
                     fontSize = 11.5;
                     lineHeight = 15.5;
                     labelMaxH = 31.0;
@@ -709,11 +738,18 @@ namespace WinBins.Views
                 }
             }
 
-            bool hasLiveFolder = !string.IsNullOrWhiteSpace(_currentBin.LiveFolderPath);
+            if (_backBtn != null)
+            {
+                _backBtn.Visibility = _subBinStack.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            }
+
+            bool hasLiveFolder = !string.IsNullOrWhiteSpace(_currentBin.LiveFolderPath) || _currentBin.LiveFolderRecentMode;
             if (hasLiveFolder)
             {
                 List<BinItem> liveItems = LauncherService.GetLiveFolderItems(_currentBin);
-                string liveSectionName = pinnedItems.Count > 0 ? "Live Folder" : string.Empty;
+                string liveSectionName = pinnedItems.Count > 0
+                    ? (_currentBin.LiveFolderRecentMode ? "Recent Files" : "Live Folder")
+                    : string.Empty;
                 foreach (BinItem live in liveItems)
                 {
                     live.Section = liveSectionName;
@@ -728,7 +764,7 @@ namespace WinBins.Views
                 _outerBorder.Padding = new Thickness(outerSide, emptyOuterTop, outerSide, outerSide);
                 _emptyTitleText.Text = hasLiveFolder ? "Folder is Empty" : "Empty Bin";
                 _emptySubText.Text = hasLiveFolder
-                    ? _currentBin.LiveFolderPath
+                    ? (_currentBin.LiveFolderRecentMode ? "Windows Recent Items" : _currentBin.LiveFolderPath)
                     : "Drop items here or right-click to add";
                 _emptyStatePanel.Visibility = Visibility.Visible;
                 _gridScroll.Visibility = Visibility.Collapsed;
@@ -748,7 +784,6 @@ namespace WinBins.Views
 
             if (useTabs)
             {
-                _availableTabs.Add(null); // All
                 bool hasUngrouped = combined.Any(t => string.IsNullOrWhiteSpace(t.Item1.Section));
                 if (hasUngrouped)
                 {
@@ -759,58 +794,65 @@ namespace WinBins.Views
                     _availableTabs.Add(sec);
                 }
 
-                if (_activeSectionTab != null &&
-                    !_availableTabs.Any(t => string.Equals(t, _activeSectionTab, StringComparison.OrdinalIgnoreCase)))
+                if (_availableTabs.Count > 0 &&
+                    (_activeSectionTab == null ||
+                     !_availableTabs.Any(t => string.Equals(t, _activeSectionTab, StringComparison.OrdinalIgnoreCase))))
                 {
-                    _activeSectionTab = null;
+                    _activeSectionTab = _availableTabs[0];
                 }
 
-                foreach (string tabKey in _availableTabs)
+                if (_availableTabs.Count > 1)
                 {
-                    string capturedKey = tabKey;
-                    string label = tabKey == null
-                        ? "All"
-                        : (tabKey == "__ungrouped__" ? "General" : tabKey);
-                    bool isActive = string.Equals(_activeSectionTab, capturedKey, StringComparison.OrdinalIgnoreCase);
-
-                    var pill = new Border
+                    foreach (string tabKey in _availableTabs)
                     {
-                        CornerRadius = new CornerRadius(11),
-                        Padding = new Thickness(10, 3, 10, 3),
-                        Margin = new Thickness(0, 0, 5, 0),
-                        Cursor = Cursors.Hand,
-                        Background = isActive
-                            ? FluentTheme.GetTintedPillBgBrush(_currentBin.AccentColorHex, 48)
-                            : FluentTheme.CardBg,
-                        BorderBrush = isActive ? binAccent : FluentTheme.CardBorder,
-                        BorderThickness = new Thickness(1),
-                        Child = new TextBlock
+                        string capturedKey = tabKey;
+                        string label = tabKey == "__ungrouped__" ? "General" : tabKey;
+                        bool isActive = string.Equals(_activeSectionTab, capturedKey, StringComparison.OrdinalIgnoreCase);
+
+                        var pill = new Border
                         {
-                            Text = label,
-                            FontSize = 11.5,
-                            FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
-                            Foreground = isActive ? FluentTheme.TextPrimary : FluentTheme.TextSecondary
-                        }
-                    };
-                    pill.MouseLeftButtonUp += (_, e) =>
-                    {
-                        _activeSectionTab = capturedKey;
-                        _selectedTileIndex = -1;
-                        RebuildContent();
-                        UpdateLayout();
-                        e.Handled = true;
-                    };
-                    _sectionTabsPanel.Children.Add(pill);
+                            CornerRadius = new CornerRadius(11),
+                            Padding = new Thickness(10, 3, 10, 3),
+                            Margin = new Thickness(0, 0, 5, 0),
+                            Cursor = Cursors.Hand,
+                            Background = isActive
+                                ? FluentTheme.GetTintedPillBgBrush(_currentBin.AccentColorHex, 48)
+                                : FluentTheme.CardBg,
+                            BorderBrush = isActive ? binAccent : FluentTheme.CardBorder,
+                            BorderThickness = new Thickness(1),
+                            Child = new TextBlock
+                            {
+                                Text = label,
+                                FontSize = 11.5,
+                                FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
+                                Foreground = isActive ? FluentTheme.TextPrimary : FluentTheme.TextSecondary
+                            }
+                        };
+                        pill.MouseLeftButtonUp += (_, e) =>
+                        {
+                            _activeSectionTab = capturedKey;
+                            _selectedTileIndex = -1;
+                            RebuildAndRealign();
+                            e.Handled = true;
+                        };
+                        _sectionTabsPanel.Children.Add(pill);
+                    }
+                    _sectionTabsScroll.Visibility = Visibility.Visible;
                 }
-                _sectionTabsScroll.Visibility = Visibility.Visible;
+                else
+                {
+                    _sectionTabsScroll.Visibility = Visibility.Collapsed;
+                }
             }
             else
             {
                 _sectionTabsScroll.Visibility = Visibility.Collapsed;
             }
 
-            double outerTop = (anyHeader || hasFilter || useTabs) ? 9 : outerSide;
-            _outerBorder.Padding = new Thickness(outerSide, outerTop, outerSide, outerSide);
+            bool tabsVisible = _sectionTabsScroll.Visibility == Visibility.Visible;
+            double outerTop = (anyHeader || hasFilter) ? 9 : outerSide;
+            double outerBottom = tabsVisible ? 9 : outerSide;
+            _outerBorder.Padding = new Thickness(outerSide, outerTop, outerSide, outerBottom);
 
             var matching = new List<Tuple<BinItem, int>>();
             foreach (var pair in combined)
@@ -1164,6 +1206,63 @@ namespace WinBins.Views
                         FontSize = 9,
                         FontWeight = FontWeights.Bold,
                         Foreground = FluentTheme.AccentInkBrush,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                });
+            }
+
+            int unreadCount = (_currentBin?.ShowNotificationBadges ?? true)
+                ? RunningAppsTaskbarManager.GetUnreadCountForWindows(runningWindows)
+                : 0;
+
+            if (unreadCount > 0)
+            {
+                iconWrap.Children.Add(new Border
+                {
+                    MinWidth = 16,
+                    Height = 16,
+                    CornerRadius = new CornerRadius(8),
+                    Background = FluentTheme.BrushFromHex("#E81123"),
+                    BorderBrush = FluentTheme.FlyoutBg,
+                    BorderThickness = new Thickness(1.2),
+                    Padding = new Thickness(3.5, 0, 3.5, 0),
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    VerticalAlignment = VerticalAlignment.Top,
+                    Margin = new Thickness(-5, -3, 0, 0),
+                    IsHitTestVisible = false,
+                    Child = new TextBlock
+                    {
+                        Text = unreadCount > 99 ? "99+" : unreadCount.ToString(),
+                        FontSize = 9,
+                        FontWeight = FontWeights.Bold,
+                        Foreground = Brushes.White,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                });
+            }
+
+            if (item.Kind == BinItemKind.SubBin || BinItem.IsSubBin(item.TargetPath))
+            {
+                iconWrap.Children.Add(new Border
+                {
+                    Width = 14,
+                    Height = 14,
+                    CornerRadius = new CornerRadius(7),
+                    Background = FluentTheme.FlyoutBg,
+                    BorderBrush = FluentTheme.SubtleBorder,
+                    BorderThickness = new Thickness(1),
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Bottom,
+                    Margin = new Thickness(0, 0, -2, -2),
+                    IsHitTestVisible = false,
+                    Child = new TextBlock
+                    {
+                        Text = "\uE76C",
+                        FontFamily = FluentTheme.IconFont,
+                        FontSize = 8,
+                        Foreground = binAccent,
                         HorizontalAlignment = HorizontalAlignment.Center,
                         VerticalAlignment = VerticalAlignment.Center
                     }
@@ -1552,6 +1651,45 @@ namespace WinBins.Views
             bool forceNewInstance = shiftHeld || ctrlHeld;
             bool keepOpen = !(_configService.Current?.ClosePopupOnLaunch ?? true);
 
+            if (item.Kind == BinItemKind.SubBin || BinItem.IsSubBin(item.TargetPath))
+            {
+                string targetBinId = BinItem.GetSubBinId(item.TargetPath);
+                BinGroup targetBin = _configService.Current?.Bins?.FirstOrDefault(b =>
+                    string.Equals(b.Id, targetBinId, StringComparison.OrdinalIgnoreCase));
+                if (targetBin != null && !string.Equals(targetBin.Id, _currentBin?.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    _subBinStack.Push(_currentBin);
+                    _currentBin = targetBin;
+                    _filterText = string.Empty;
+                    _activeSectionTab = null;
+                    _selectedTileIndex = -1;
+                    RebuildContent();
+                    UpdateLayout();
+                    PositionAboveTaskbarAnchor(_lastAnchorScreenPx);
+                }
+                return;
+            }
+
+            if (item.Kind == BinItemKind.Snippet || BinItem.IsSnippet(item.TargetPath))
+            {
+                if (LauncherService.LaunchItem(item))
+                {
+                    ShowDropHint($"Copied \"{item.Name}\" to clipboard", highlightOuterBorder: false);
+                    var clearTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1400) };
+                    clearTimer.Tick += (_, __) =>
+                    {
+                        clearTimer.Stop();
+                        ShowDropHint(null, highlightOuterBorder: false);
+                        if (!keepOpen && IsVisible)
+                        {
+                            HidePopup();
+                        }
+                    };
+                    clearTimer.Start();
+                }
+                return;
+            }
+
             List<RunningWindowEntry> liveWindows = !forceNewInstance
                 ? (_runningAppsManager?.GetRunningWindowsForItem(item) ?? new List<RunningWindowEntry>())
                 : null;
@@ -1587,6 +1725,20 @@ namespace WinBins.Views
             {
                 LauncherService.LaunchItem(item);
             }
+        }
+
+        private void NavigateBackSubBin()
+        {
+            if (_subBinStack.Count == 0)
+                return;
+
+            _currentBin = _subBinStack.Pop();
+            _filterText = string.Empty;
+            _activeSectionTab = null;
+            _selectedTileIndex = -1;
+            RebuildContent();
+            UpdateLayout();
+            PositionAboveTaskbarAnchor(_lastAnchorScreenPx);
         }
 
         private void OpenFolderPeekPopupMenu(FrameworkElement anchor, string folderPath)
@@ -2770,8 +2922,7 @@ namespace WinBins.Views
                 {
                     _filterText = string.Empty;
                     _selectedTileIndex = -1;
-                    RebuildContent();
-                    UpdateLayout();
+                    RebuildAndRealign();
                 }
                 else
                 {
@@ -2791,19 +2942,26 @@ namespace WinBins.Views
                     : (curTabIdx + 1) % _availableTabs.Count;
                 _activeSectionTab = _availableTabs[nextTabIdx];
                 _selectedTileIndex = -1;
-                RebuildContent();
-                UpdateLayout();
+                RebuildAndRealign();
                 e.Handled = true;
                 return;
             }
 
-            if (key == Key.Back && !string.IsNullOrEmpty(_filterText))
+            if (key == Key.Back)
             {
-                _filterText = _filterText.Substring(0, _filterText.Length - 1);
-                RebuildContent();
-                UpdateLayout();
-                e.Handled = true;
-                return;
+                if (!string.IsNullOrEmpty(_filterText))
+                {
+                    _filterText = _filterText.Substring(0, _filterText.Length - 1);
+                    RebuildAndRealign();
+                    e.Handled = true;
+                    return;
+                }
+                if (_subBinStack.Count > 0)
+                {
+                    NavigateBackSubBin();
+                    e.Handled = true;
+                    return;
+                }
             }
 
             // Quick launch 1..9 when filter is empty (or Alt+1..9 anytime)
@@ -2892,8 +3050,7 @@ namespace WinBins.Views
                 return;
 
             _filterText += e.Text;
-            RebuildContent();
-            UpdateLayout();
+            RebuildAndRealign();
             e.Handled = true;
         }
 

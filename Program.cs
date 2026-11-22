@@ -100,6 +100,20 @@ namespace WinBins
                     if (i + 1 < args.Length)
                         return $"ADD_ITEM|{args[++i]}";
                 }
+                else if (string.Equals(a, "--add-path", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 2 < args.Length)
+                    {
+                        string binId = args[++i];
+                        string itemPath = args[++i];
+                        return $"ADD_PATH|{binId}|{itemPath}";
+                    }
+                }
+                else if (string.Equals(a, "--profile", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 1 < args.Length)
+                        return $"SWITCH_PROFILE|{args[++i]}";
+                }
                 else if (string.Equals(a, "--flyout-options", StringComparison.OrdinalIgnoreCase))
                 {
                     if (i + 1 < args.Length)
@@ -206,7 +220,11 @@ namespace WinBins
             _configService.Load();
             if (_configService.Current != null)
             {
-                FluentTheme.ApplyTheme(_configService.Current.ThemeMode, _configService.Current.UseAcrylicFlyout);
+                FluentTheme.ApplyTheme(
+                    _configService.Current.ThemeMode,
+                    _configService.Current.FlyoutBackdrop,
+                    _configService.Current.FlyoutOpacityPercent);
+                ShellContextMenuService.SyncExplorerContextMenu(_configService.Current);
             }
 
             _iconService = new IconService(_configService);
@@ -381,6 +399,36 @@ namespace WinBins
                 menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
             }
 
+            var profiles = _configService.Current?.Profiles;
+            if (profiles != null && profiles.Count > 0)
+            {
+                var profileMenu = new System.Windows.Forms.ToolStripMenuItem("Profiles");
+                string activeId = _configService.Current.ActiveProfileId ?? string.Empty;
+
+                var allItem = new System.Windows.Forms.ToolStripMenuItem("All Bins")
+                {
+                    Checked = string.IsNullOrWhiteSpace(activeId)
+                };
+                allItem.Click += (_, __) => Dispatcher.BeginInvoke(new Action(() => SwitchActiveProfile("all")));
+                profileMenu.DropDownItems.Add(allItem);
+                profileMenu.DropDownItems.Add(new System.Windows.Forms.ToolStripSeparator());
+
+                foreach (BinProfile profile in profiles)
+                {
+                    if (profile == null) continue;
+                    BinProfile capturedProf = profile;
+                    var pItem = new System.Windows.Forms.ToolStripMenuItem(capturedProf.Name)
+                    {
+                        Checked = string.Equals(activeId, capturedProf.Id, StringComparison.OrdinalIgnoreCase)
+                    };
+                    pItem.Click += (_, __) => Dispatcher.BeginInvoke(new Action(() => SwitchActiveProfile(capturedProf.Id)));
+                    profileMenu.DropDownItems.Add(pItem);
+                }
+
+                menu.Items.Add(profileMenu);
+                menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+            }
+
             var searchTrayItem = new System.Windows.Forms.ToolStripMenuItem("Search All Bins...");
             searchTrayItem.Click += (_, __) => Dispatcher.BeginInvoke(new Action(() =>
             {
@@ -505,6 +553,43 @@ namespace WinBins
                 return;
             }
 
+            if (parts.Length >= 3 && string.Equals(verb, "ADD_PATH", StringComparison.OrdinalIgnoreCase))
+            {
+                string binId = parts[1];
+                string rawPath = string.Join("|", parts.Skip(2)).Trim().Trim('"');
+                BinGroup bin = FindBin(binId);
+                if (bin != null && !string.IsNullOrWhiteSpace(rawPath) && (File.Exists(rawPath) || Directory.Exists(rawPath)))
+                {
+                    bool exists = bin.Items.Any(it => string.Equals(it.TargetPath, rawPath, StringComparison.OrdinalIgnoreCase));
+                    if (!exists)
+                    {
+                        bin.Items.Add(BinItem.FromPath(rawPath));
+                        bin.IconRevision++;
+                        _configService.Save();
+                        _taskbarManager.RefreshBin(bin);
+                        _runningAppsManager.SyncRunningWindows();
+                        _mainWindow?.RefreshFullUi();
+                        RebuildTrayMenu();
+                    }
+                    try
+                    {
+                        _trayIcon?.ShowBalloonTip(
+                            2200,
+                            "Added to Bin",
+                            $"Added \"{Path.GetFileName(rawPath.TrimEnd('\\'))}\" to \"{bin.Name}\".",
+                            System.Windows.Forms.ToolTipIcon.None);
+                    }
+                    catch { }
+                }
+                return;
+            }
+
+            if (parts.Length >= 2 && string.Equals(verb, "SWITCH_PROFILE", StringComparison.OrdinalIgnoreCase))
+            {
+                SwitchActiveProfile(parts[1]);
+                return;
+            }
+
             if (parts.Length >= 2 && string.Equals(verb, "ADD_ITEM", StringComparison.OrdinalIgnoreCase))
             {
                 _popupWindow?.HidePopup();
@@ -563,6 +648,20 @@ namespace WinBins
             else
             {
                 LauncherService.LaunchItem(item);
+            }
+        }
+
+        private void SwitchActiveProfile(string profileIdOrAll)
+        {
+            if (_configService.ApplyProfile(profileIdOrAll))
+            {
+                _popupWindow?.HidePopup();
+                _peekWindow?.HidePeek();
+                _taskbarManager?.SyncAllBins();
+                _runningAppsManager?.SyncRunningWindows();
+                _indicatorOverlayManager?.SyncIndicators();
+                _mainWindow?.RefreshFullUi();
+                RebuildTrayMenu();
             }
         }
 

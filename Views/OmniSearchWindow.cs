@@ -61,7 +61,7 @@ namespace WinBins.Views
             AllowsTransparency = false;
             ShowInTaskbar = false;
             Topmost = true;
-            Background = FluentTheme.PopupBg;
+            Background = Brushes.Transparent;
             Foreground = FluentTheme.TextPrimary;
             FontFamily = FluentTheme.BodyFont;
             FluentTheme.ApplyGlobalResources(Resources);
@@ -70,7 +70,7 @@ namespace WinBins.Views
             {
                 CaptionHeight = 0,
                 ResizeBorderThickness = new Thickness(0),
-                GlassFrameThickness = new Thickness(0),
+                GlassFrameThickness = new Thickness(-1),
                 CornerRadius = new CornerRadius(0)
             });
 
@@ -82,11 +82,14 @@ namespace WinBins.Views
 
             FluentTheme.ThemeChanged += () =>
             {
-                IntPtr hwnd = new WindowInteropHelper(this).Handle;
-                if (hwnd != IntPtr.Zero)
+                Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    ApplyDwmBackdrop(hwnd);
-                }
+                    IntPtr hwnd = new WindowInteropHelper(this).Handle;
+                    if (hwnd != IntPtr.Zero)
+                    {
+                        ApplyDwmBackdrop(hwnd);
+                    }
+                }));
             };
 
             Deactivated += (_, __) => HideSearch();
@@ -224,12 +227,13 @@ namespace WinBins.Views
 
         private void ApplyDwmBackdrop(IntPtr hwnd)
         {
-            bool useAcrylic = _configService.Current?.UseAcrylicFlyout ?? true;
-            Win32Interop.ApplyWindows11WindowStyling(
+            BinBackdropStyle backdrop = _configService.Current?.FlyoutBackdrop ?? BinBackdropStyle.Acrylic;
+            int opacity = _configService.Current?.FlyoutOpacityPercent ?? 82;
+            Win32Interop.ApplyFlyoutBackdropAndOpacity(
                 hwnd,
-                useMica: !useAcrylic,
-                useAcrylic: useAcrylic,
-                forceDarkMode: !FluentTheme.IsLightThemeActive);
+                (int)backdrop,
+                opacity,
+                FluentTheme.IsLightThemeActive);
         }
 
         public void ToggleSearch()
@@ -300,7 +304,7 @@ namespace WinBins.Views
                 {
                     combinedItems.AddRange(bin.Items.Where(it => it != null));
                 }
-                if (!string.IsNullOrWhiteSpace(bin.LiveFolderPath))
+                if (!string.IsNullOrWhiteSpace(bin.LiveFolderPath) || bin.LiveFolderRecentMode)
                 {
                     combinedItems.AddRange(LauncherService.GetLiveFolderItems(bin, 16));
                 }

@@ -1,0 +1,125 @@
+name: Build & Release Setup
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version override (leave empty to use Properties/AssemblyInfo.cs)'
+        required: false
+        default: ''
+      create_release:
+        description: 'Publish a GitHub Release with the installer'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Build Windows Setup (x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $ver = "${{ github.ref_name }}".TrimStart('v')
+          } elseif (-not [string]::IsNullOrWhiteSpace("${{ inputs.version }}")) {
+            $ver = "${{ inputs.version }}".TrimStart('v')
+          } else {
+            $asm = Get-Content "Properties/AssemblyInfo.cs" -Raw
+            if ($asm -match 'public const string Current = "([^"]+)"') {
+              $ver = $Matches[1]
+            } else {
+              throw "Could not parse AppVersion.Current from Properties/AssemblyInfo.cs"
+            }
+          }
+          Write-Host "Resolved version: $ver"
+          "value=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=v$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Release x64
+        shell: pwsh
+        run: |
+          msbuild Bins.csproj /p:Configuration=Release /p:Platform=x64 /v:minimal
+
+      - name: Ensure Inno Setup 6
+        shell: pwsh
+        run: |
+          $iscc = @(
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "C:\Program Files\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Compile Inno Setup installer
+        id: installer
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.version.outputs.value }}"
+          $iscc = @(
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "C:\Program Files\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            $iscc = (Get-Command ISCC.exe).Source
+          }
+
+          & $iscc "/DMyAppVersion=$ver" "installer\Bins.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $setupPath = "dist\Bins-Setup-$ver-x64.exe"
+          if (-not (Test-Path $setupPath)) {
+            throw "Expected installer not found at $setupPath"
+          }
+
+          $sha = (Get-FileHash -Path $setupPath -Algorithm SHA256).Hash
+          "$sha  Bins-Setup-$ver-x64.exe" | Set-Content -Path "dist\SHA256SUMS.txt" -Encoding ascii
+
+          # Generate release-ready WinGet manifest with real URL and SHA256
+          $manifest = Get-Content "installer\winget\PiyushAgade.Bins.yaml" -Raw
+          $manifest = $manifest -replace '(?m)^PackageVersion:\s*.*$', "PackageVersion: $ver"
+          $manifest = $manifest -replace '(?m)^(\s*InstallerUrl:\s*).*$', "`${1}https://github.com/${{ github.repository }}/releases/download/v$ver/Bins-Setup-$ver-x64.exe"
+          $manifest = $manifest -replace '(?m)^(\s*InstallerSha256:\s*).*$', "`${1}$sha"
+          $manifest | Set-Content -Path "dist\PiyushAgade.Bins.yaml" -Encoding utf8
+
+          Write-Host "Built $setupPath (SHA256: $sha)"
+          "setup_path=$setupPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "sha256=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bins-Setup-${{ steps.version.outputs.value }}-x64
+          path: |
+            dist/Bins-Setup-${{ steps.version.outputs.value }}-x64.exe
+            dist/SHA256SUMS.txt
+            dist/PiyushAgade.Bins.yaml
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag' || inputs.create_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Bins ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/Bins-Setup-${{ steps.version.outputs.value }}-x64.exe
+            dist/SHA256SUMS.txt
+            dist/PiyushAgade.Bins.yaml

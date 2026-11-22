@@ -1015,6 +1015,44 @@ namespace WinBins.Interop
         [DllImport("dwmapi.dll")]
         public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
 
+        [StructLayout(LayoutKind.Sequential)]
+        public struct PSIZE
+        {
+            public int x;
+            public int y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct DWM_THUMBNAIL_PROPERTIES
+        {
+            public int dwFlags;
+            public RECT rcDestination;
+            public RECT rcSource;
+            public byte opacity;
+            [MarshalAs(UnmanagedType.Bool)]
+            public bool fVisible;
+            [MarshalAs(UnmanagedType.Bool)]
+            public bool fSourceClientAreaOnly;
+        }
+
+        public const int DWM_TNP_RECTDESTINATION = 0x00000001;
+        public const int DWM_TNP_RECTSOURCE = 0x00000002;
+        public const int DWM_TNP_OPACITY = 0x00000004;
+        public const int DWM_TNP_VISIBLE = 0x00000008;
+        public const int DWM_TNP_SOURCECLIENTAREAONLY = 0x00000010;
+
+        [DllImport("dwmapi.dll")]
+        public static extern int DwmRegisterThumbnail(IntPtr hwndDestination, IntPtr hwndSource, out IntPtr phThumbnailId);
+
+        [DllImport("dwmapi.dll")]
+        public static extern int DwmUnregisterThumbnail(IntPtr hThumbnailId);
+
+        [DllImport("dwmapi.dll")]
+        public static extern int DwmQueryThumbnailSourceSize(IntPtr hThumbnail, out PSIZE pSize);
+
+        [DllImport("dwmapi.dll")]
+        public static extern int DwmUpdateThumbnailProperties(IntPtr hThumbnailId, ref DWM_THUMBNAIL_PROPERTIES ptnProperties);
+
         [DllImport("dwmapi.dll")]
         public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
 
@@ -1169,6 +1207,259 @@ namespace WinBins.Interop
                                 break;
                         }
                     }
+                }
+            }
+
+            return canvas;
+        }
+
+        private static void DrawMosaicBackplate(Graphics g, Color? tintColor)
+        {
+            var plateRect = new Rectangle(2, 2, 124, 124);
+            Color topFill = tintColor.HasValue
+                ? Color.FromArgb(228, BlendByte(tintColor.Value.R, 30, 0.72), BlendByte(tintColor.Value.G, 32, 0.72), BlendByte(tintColor.Value.B, 38, 0.72))
+                : Color.FromArgb(205, 48, 52, 62);
+            Color botFill = tintColor.HasValue
+                ? Color.FromArgb(218, BlendByte(tintColor.Value.R, 16, 0.48), BlendByte(tintColor.Value.G, 18, 0.48), BlendByte(tintColor.Value.B, 24, 0.48))
+                : Color.FromArgb(195, 30, 32, 40);
+            Color strokeCol = tintColor.HasValue
+                ? Color.FromArgb(150, BlendByte(tintColor.Value.R, 255, 0.62), BlendByte(tintColor.Value.G, 255, 0.62), BlendByte(tintColor.Value.B, 255, 0.62))
+                : Color.FromArgb(85, 255, 255, 255);
+
+            using (GraphicsPath platePath = CreateRoundedRectPath(plateRect, 28))
+            using (var fillBrush = new LinearGradientBrush(plateRect, topFill, botFill, LinearGradientMode.Vertical))
+            using (var borderPen = new Pen(strokeCol, 2.5f))
+            {
+                g.FillPath(fillBrush, platePath);
+                g.DrawPath(borderPen, platePath);
+            }
+        }
+
+        /// <summary>
+        /// Renders up to 9 sub-icons into a crisp 3x3 mini-grid on a 128x128 32bpp ARGB Bitmap.
+        /// </summary>
+        public static Bitmap CreateGroupMosaic3x3Bitmap(IList<Bitmap> subIcons, bool showBackplate = false, Color? tintColor = null)
+        {
+            const int canvasSize = 128;
+            var canvas = new Bitmap(canvasSize, canvasSize, PixelFormat.Format32bppArgb);
+
+            var validIcons = new List<Bitmap>(9);
+            if (subIcons != null)
+            {
+                for (int i = 0; i < subIcons.Count && validIcons.Count < 9; i++)
+                {
+                    if (subIcons[i] != null)
+                        validIcons.Add(subIcons[i]);
+                }
+            }
+
+            using (Graphics g = Graphics.FromImage(canvas))
+            {
+                g.Clear(Color.Transparent);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.CompositingQuality = CompositingQuality.HighQuality;
+
+                if (showBackplate)
+                {
+                    DrawMosaicBackplate(g, tintColor);
+                }
+
+                if (validIcons.Count == 0)
+                {
+                    DrawEmptyPlaceholderGrid(g, inset: showBackplate);
+                    return canvas;
+                }
+
+                using (var imageAttrs = new ImageAttributes())
+                {
+                    imageAttrs.SetWrapMode(WrapMode.TileFlipXY);
+                    int margin = showBackplate ? 14 : 4;
+                    int gap = showBackplate ? 5 : 6;
+                    int cell = (canvasSize - 2 * margin - 2 * gap) / 3;
+
+                    for (int i = 0; i < validIcons.Count; i++)
+                    {
+                        int row = i / 3;
+                        int col = i % 3;
+                        int x = margin + col * (cell + gap);
+                        int y = margin + row * (cell + gap);
+                        DrawSubIcon(g, validIcons[i], new Rectangle(x, y, cell, cell), imageAttrs);
+                    }
+                }
+            }
+
+            return canvas;
+        }
+
+        /// <summary>
+        /// Renders up to 3 sub-icons as a layered, slightly fanned/tilted stack of cards on a 128x128 32bpp ARGB Bitmap.
+        /// </summary>
+        public static Bitmap CreateFannedStackBitmap(IList<Bitmap> subIcons, bool showBackplate = false, Color? tintColor = null)
+        {
+            const int canvasSize = 128;
+            var canvas = new Bitmap(canvasSize, canvasSize, PixelFormat.Format32bppArgb);
+
+            var validIcons = new List<Bitmap>(3);
+            if (subIcons != null)
+            {
+                for (int i = 0; i < subIcons.Count && validIcons.Count < 3; i++)
+                {
+                    if (subIcons[i] != null)
+                        validIcons.Add(subIcons[i]);
+                }
+            }
+
+            using (Graphics g = Graphics.FromImage(canvas))
+            {
+                g.Clear(Color.Transparent);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.CompositingQuality = CompositingQuality.HighQuality;
+
+                if (showBackplate)
+                {
+                    DrawMosaicBackplate(g, tintColor);
+                }
+
+                if (validIcons.Count == 0)
+                {
+                    DrawEmptyPlaceholderGrid(g, inset: showBackplate);
+                    return canvas;
+                }
+
+                using (var imageAttrs = new ImageAttributes())
+                {
+                    imageAttrs.SetWrapMode(WrapMode.TileFlipXY);
+
+                    // Draw back-to-front: index 2 (left/back), index 1 (right/mid), index 0 (front/center)
+                    if (validIcons.Count >= 3)
+                    {
+                        DrawTiltedCardIcon(g, validIcons[2], cx: 44f, cy: 62f, size: 62, angleDeg: -13f, imageAttrs, cardAlpha: 225);
+                    }
+                    if (validIcons.Count >= 2)
+                    {
+                        DrawTiltedCardIcon(g, validIcons[1], cx: 84f, cy: 60f, size: 64, angleDeg: 12f, imageAttrs, cardAlpha: 238);
+                    }
+                    DrawTiltedCardIcon(g, validIcons[0], cx: 64f, cy: 68f, size: validIcons.Count == 1 ? 82 : 70, angleDeg: 0f, imageAttrs, cardAlpha: 255);
+                }
+            }
+
+            return canvas;
+        }
+
+        private static void DrawTiltedCardIcon(
+            Graphics g,
+            Bitmap icon,
+            float cx,
+            float cy,
+            int size,
+            float angleDeg,
+            ImageAttributes attrs,
+            int cardAlpha)
+        {
+            var state = g.Save();
+            try
+            {
+                g.TranslateTransform(cx, cy);
+                if (Math.Abs(angleDeg) > 0.01f)
+                    g.RotateTransform(angleDeg);
+
+                int half = size / 2;
+                var shadowRect = new Rectangle(-half + 2, -half + 4, size, size);
+                var cardRect = new Rectangle(-half, -half, size, size);
+
+                using (GraphicsPath shadowPath = CreateRoundedRectPath(shadowRect, 14))
+                using (var shadowBrush = new SolidBrush(Color.FromArgb(85, 0, 0, 0)))
+                {
+                    g.FillPath(shadowBrush, shadowPath);
+                }
+
+                using (GraphicsPath cardPath = CreateRoundedRectPath(cardRect, 14))
+                using (var cardBrush = new SolidBrush(Color.FromArgb(cardAlpha, 38, 42, 52)))
+                using (var borderPen = new Pen(Color.FromArgb(110, 255, 255, 255), 1.8f))
+                {
+                    g.FillPath(cardBrush, cardPath);
+                    g.DrawPath(borderPen, cardPath);
+                }
+
+                int pad = Math.Max(6, size / 7);
+                DrawSubIcon(g, icon, new Rectangle(-half + pad, -half + pad, size - 2 * pad, size - 2 * pad), attrs);
+            }
+            finally
+            {
+                g.Restore(state);
+            }
+        }
+
+        /// <summary>
+        /// Renders a rounded squircle icon with an accent gradient and centered Emoji or 1-3 character Monogram.
+        /// </summary>
+        public static Bitmap CreateBadgeMonogramBitmap(string badgeText, Color? tintColor = null)
+        {
+            const int canvasSize = 128;
+            var canvas = new Bitmap(canvasSize, canvasSize, PixelFormat.Format32bppArgb);
+            string text = (badgeText ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(text))
+                text = "B";
+
+            // Limit to at most 3 display characters/grapheme elements
+            if (text.Length > 4)
+            {
+                var si = new System.Globalization.StringInfo(text);
+                if (si.LengthInTextElements > 3)
+                    text = si.SubstringByTextElements(0, 3);
+            }
+
+            Color baseTint = tintColor ?? Color.FromArgb(255, 56, 152, 236);
+            Color topFill = Color.FromArgb(255, BlendByte(baseTint.R, 255, 0.85), BlendByte(baseTint.G, 255, 0.85), BlendByte(baseTint.B, 255, 0.85));
+            Color botFill = Color.FromArgb(255, BlendByte(baseTint.R, 12, 0.65), BlendByte(baseTint.G, 14, 0.65), BlendByte(baseTint.B, 22, 0.65));
+            Color strokeCol = Color.FromArgb(145, 255, 255, 255);
+
+            using (Graphics g = Graphics.FromImage(canvas))
+            {
+                g.Clear(Color.Transparent);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+
+                var plateRect = new Rectangle(4, 4, 120, 120);
+                using (GraphicsPath platePath = CreateRoundedRectPath(plateRect, 28))
+                using (var fillBrush = new LinearGradientBrush(plateRect, topFill, botFill, LinearGradientMode.ForwardDiagonal))
+                using (var borderPen = new Pen(strokeCol, 2.5f))
+                {
+                    g.FillPath(fillBrush, platePath);
+                    g.DrawPath(borderPen, platePath);
+                }
+
+                // Detect if text contains non-ASCII/emoji symbols
+                bool isEmojiLike = false;
+                for (int i = 0; i < text.Length; i++)
+                {
+                    if (text[i] > 127)
+                    {
+                        isEmojiLike = true;
+                        break;
+                    }
+                }
+
+                int elemLen = new System.Globalization.StringInfo(text).LengthInTextElements;
+                float fontSize = isEmojiLike
+                    ? (elemLen <= 1 ? 54f : 40f)
+                    : (elemLen <= 1 ? 62f : (elemLen == 2 ? 46f : 35f));
+
+                string fontName = isEmojiLike ? "Segoe UI Emoji" : "Segoe UI Variable Display";
+                using (var font = new Font(fontName, fontSize, isEmojiLike ? FontStyle.Regular : FontStyle.Bold, GraphicsUnit.Pixel))
+                using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                using (var shadowBrush = new SolidBrush(Color.FromArgb(80, 0, 0, 0)))
+                using (var textBrush = new SolidBrush(Color.White))
+                {
+                    var shadowRect = new RectangleF(4, 7, 120, 120);
+                    var textRect = new RectangleF(4, 4, 120, 120);
+                    g.DrawString(text, font, shadowBrush, shadowRect, sf);
+                    g.DrawString(text, font, textBrush, textRect, sf);
                 }
             }
 
@@ -1852,6 +2143,120 @@ namespace WinBins.Interop
 
         #region Windows 11 DWM & Taskbar Window Helpers
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct AccentPolicy
+        {
+            public int AccentState;
+            public int AccentFlags;
+            public uint GradientColor;
+            public int AnimationId;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct WindowCompositionAttributeData
+        {
+            public int Attribute;
+            public IntPtr Data;
+            public int SizeOfData;
+        }
+
+        private const int WCA_ACCENT_POLICY = 19;
+        private const int ACCENT_DISABLED = 0;
+        private const int ACCENT_ENABLE_ACRYLICBLURBEHIND = 4;
+
+        [DllImport("user32.dll")]
+        private static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
+
+        private static void SetAccentPolicy(IntPtr hwnd, int accentState, uint gradientColor = 0)
+        {
+            if (hwnd == IntPtr.Zero)
+                return;
+
+            var accent = new AccentPolicy
+            {
+                AccentState = accentState,
+                AccentFlags = accentState == ACCENT_ENABLE_ACRYLICBLURBEHIND ? 2 : 0,
+                GradientColor = gradientColor,
+                AnimationId = 0
+            };
+
+            int size = Marshal.SizeOf(accent);
+            IntPtr ptr = Marshal.AllocHGlobal(size);
+            try
+            {
+                Marshal.StructureToPtr(accent, ptr, false);
+                var data = new WindowCompositionAttributeData
+                {
+                    Attribute = WCA_ACCENT_POLICY,
+                    Data = ptr,
+                    SizeOfData = size
+                };
+                SetWindowCompositionAttribute(hwnd, ref data);
+            }
+            catch
+            {
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(ptr);
+            }
+        }
+
+        /// <summary>
+        /// Applies Windows 11 rounded corners + real variable-opacity Acrylic blur (via SetWindowCompositionAttribute),
+        /// Mica (DWMSBT_MAINWINDOW), or transparent/solid DWM glass compositing.
+        /// </summary>
+        public static void ApplyFlyoutBackdropAndOpacity(
+            IntPtr hwnd,
+            int backdropStyle,
+            int opacityPercent,
+            bool isLightTheme)
+        {
+            if (hwnd == IntPtr.Zero)
+                return;
+
+            try
+            {
+                int dark = isLightTheme ? 0 : 1;
+                DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
+
+                int corner = DWMWCP_ROUND;
+                DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
+
+                int clampedPct = Math.Max(15, Math.Min(100, opacityPercent));
+
+                if (backdropStyle == 0) // Acrylic
+                {
+                    // Clear DWM system backdrop so it doesn't paint a fixed-opacity gray layer behind our variable-alpha Acrylic
+                    int backdropNone = DWMSBT_NONE;
+                    DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdropNone, sizeof(int));
+
+                    // GradientColor format is 0xAABBGGRR
+                    // Clamp alpha between 0x10 and 0xF8 so blur stays active even near 100%
+                    uint alpha = clampedPct >= 100
+                        ? 0xFFu
+                        : (uint)Math.Max(0x10, Math.Min(0xF5, (int)Math.Round(255.0 * clampedPct / 100.0)));
+                    uint bgr = isLightTheme ? 0x00F6F6F6u : 0x00202020u;
+                    SetAccentPolicy(hwnd, ACCENT_ENABLE_ACRYLICBLURBEHIND, (alpha << 24) | bgr);
+                }
+                else if (backdropStyle == 1) // Mica
+                {
+                    SetAccentPolicy(hwnd, ACCENT_DISABLED, 0);
+                    int backdropMica = DWMSBT_MAINWINDOW;
+                    DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdropMica, sizeof(int));
+                }
+                else // Solid (or clear per-pixel alpha glass via WPF PopupBg)
+                {
+                    SetAccentPolicy(hwnd, ACCENT_DISABLED, 0);
+                    int backdropNone = DWMSBT_NONE;
+                    DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdropNone, sizeof(int));
+                }
+            }
+            catch
+            {
+            }
+        }
+
         public static void ApplyWindows11WindowStyling(
             IntPtr hwnd,
             bool useMica = false,
@@ -2180,6 +2585,58 @@ namespace WinBins.Interop
                 return;
 
             PostMessageW(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        }
+
+        public const byte VK_VOLUME_MUTE = 0xAD;
+        public const byte VK_MEDIA_NEXT_TRACK = 0xB0;
+        public const byte VK_MEDIA_PREV_TRACK = 0xB1;
+        public const byte VK_MEDIA_PLAY_PAUSE = 0xB3;
+        private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
+        private const uint KEYEVENTF_KEYUP = 0x0002;
+        private const uint WM_SETTINGCHANGE = 0x001A;
+        private const uint SMTO_ABORTIFHUNG = 0x0002;
+
+        [DllImport("user32.dll")]
+        private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr SendMessageTimeoutW(
+            IntPtr hWnd,
+            uint Msg,
+            UIntPtr wParam,
+            string lParam,
+            uint fuFlags,
+            uint uTimeout,
+            out UIntPtr lpdwResult);
+
+        public static void SendMediaKey(byte vk)
+        {
+            try
+            {
+                keybd_event(vk, 0, KEYEVENTF_EXTENDEDKEY, UIntPtr.Zero);
+                keybd_event(vk, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, UIntPtr.Zero);
+            }
+            catch
+            {
+            }
+        }
+
+        public static void BroadcastThemeChange()
+        {
+            try
+            {
+                SendMessageTimeoutW(
+                    new IntPtr(0xFFFF), // HWND_BROADCAST
+                    WM_SETTINGCHANGE,
+                    UIntPtr.Zero,
+                    "ImmersiveColorSet",
+                    SMTO_ABORTIFHUNG,
+                    500,
+                    out _);
+            }
+            catch
+            {
+            }
         }
 
         #endregion

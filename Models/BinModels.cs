@@ -8,7 +8,17 @@ namespace WinBins.Models
     public enum BinIconMode
     {
         GridMosaic = 0,
-        CustomIcon = 1
+        CustomIcon = 1,
+        Grid3x3 = 2,
+        FannedStack = 3,
+        BadgeMonogram = 4
+    }
+
+    public enum BinBackdropStyle
+    {
+        Acrylic = 0,
+        Mica = 1,
+        Solid = 2
     }
 
     public enum BinFlyoutDensity
@@ -53,7 +63,50 @@ namespace WinBins.Models
         FileOrUrl = 3,
         WebUrl = 4,
         PackagedApp = 5,
-        SystemCommand = 6
+        SystemCommand = 6,
+        SubBin = 7,
+        Snippet = 8
+    }
+
+    [DataContract]
+    public class BinProfile
+    {
+        [DataMember(Order = 1)]
+        public string Id { get; set; }
+
+        [DataMember(Order = 2)]
+        public string Name { get; set; }
+
+        [DataMember(Order = 3)]
+        public List<string> EnabledBinIds { get; set; }
+
+        public BinProfile()
+        {
+            SetFieldDefaults();
+        }
+
+        [OnDeserializing]
+        private void OnDeserializing(StreamingContext context)
+        {
+            SetFieldDefaults();
+        }
+
+        private void SetFieldDefaults()
+        {
+            Id = Guid.NewGuid().ToString("N").Substring(0, 8);
+            Name = "Profile";
+            EnabledBinIds = new List<string>();
+        }
+
+        public void EnsureDefaults()
+        {
+            if (string.IsNullOrWhiteSpace(Id))
+                Id = Guid.NewGuid().ToString("N").Substring(0, 8);
+            if (string.IsNullOrWhiteSpace(Name))
+                Name = "Profile";
+            if (EnabledBinIds == null)
+                EnabledBinIds = new List<string>();
+        }
     }
 
     [DataContract]
@@ -92,6 +145,27 @@ namespace WinBins.Models
         [DataMember(Order = 11)]
         public string GlobalSearchHotkey { get; set; } = "Ctrl+Alt+Space";
 
+        [DataMember(Order = 12)]
+        public BinBackdropStyle FlyoutBackdrop { get; set; } = BinBackdropStyle.Acrylic;
+
+        [DataMember(Order = 13)]
+        public int FlyoutOpacityPercent { get; set; } = 82;
+
+        [DataMember(Order = 14)]
+        public int TileIconSize { get; set; } = 32;
+
+        [DataMember(Order = 15)]
+        public bool ExplorerContextMenuEnabled { get; set; } = false;
+
+        [DataMember(Order = 16)]
+        public List<BinProfile> Profiles { get; set; } = new List<BinProfile>();
+
+        [DataMember(Order = 17)]
+        public string ActiveProfileId { get; set; } = string.Empty;
+
+        [DataMember(Order = 18)]
+        public bool ShowLiveWindowThumbnails { get; set; } = true;
+
         public AppConfig()
         {
             SetFieldDefaults();
@@ -116,6 +190,13 @@ namespace WinBins.Models
             ThemeMode = BinThemeMode.Dark;
             UseAcrylicFlyout = true;
             GlobalSearchHotkey = "Ctrl+Alt+Space";
+            FlyoutBackdrop = BinBackdropStyle.Acrylic;
+            FlyoutOpacityPercent = 82;
+            TileIconSize = 32;
+            ExplorerContextMenuEnabled = false;
+            Profiles = new List<BinProfile>();
+            ActiveProfileId = string.Empty;
+            ShowLiveWindowThumbnails = true;
         }
 
         public void EnsureDefaults()
@@ -125,9 +206,34 @@ namespace WinBins.Models
                 Bins = new List<BinGroup>();
             }
 
+            if (Profiles == null)
+            {
+                Profiles = new List<BinProfile>();
+            }
+
             if (HoverOpenDelayMs < 100) HoverOpenDelayMs = 100;
             if (HoverOpenDelayMs > 1500) HoverOpenDelayMs = 1500;
             if (GlobalSearchHotkey == null) GlobalSearchHotkey = string.Empty;
+            if (ActiveProfileId == null) ActiveProfileId = string.Empty;
+            if (FlyoutOpacityPercent < 15) FlyoutOpacityPercent = 15;
+            if (FlyoutOpacityPercent > 100) FlyoutOpacityPercent = 100;
+            if (TileIconSize < 24) TileIconSize = 24;
+            if (TileIconSize > 48) TileIconSize = 48;
+
+            // Keep legacy UseAcrylicFlyout in sync with FlyoutBackdrop
+            if (!UseAcrylicFlyout && FlyoutBackdrop == BinBackdropStyle.Acrylic)
+            {
+                FlyoutBackdrop = BinBackdropStyle.Solid;
+            }
+            else if (FlyoutBackdrop != BinBackdropStyle.Solid)
+            {
+                UseAcrylicFlyout = true;
+            }
+
+            foreach (var profile in Profiles)
+            {
+                profile?.EnsureDefaults();
+            }
 
             foreach (var bin in Bins)
             {
@@ -220,6 +326,18 @@ namespace WinBins.Models
         [DataMember(Order = 27)]
         public bool FloatOpenAppsFirst { get; set; }
 
+        [DataMember(Order = 28)]
+        public string BadgeText { get; set; }
+
+        [DataMember(Order = 29)]
+        public string LiveFolderFilter { get; set; }
+
+        [DataMember(Order = 30)]
+        public bool LiveFolderRecentMode { get; set; }
+
+        [DataMember(Order = 31)]
+        public bool ShowNotificationBadges { get; set; }
+
         public BinGroup()
         {
             SetFieldDefaults();
@@ -260,6 +378,10 @@ namespace WinBins.Models
             LiveFolderSort = LiveFolderSortOrder.NewestFirst;
             AccentColorHex = string.Empty;
             FloatOpenAppsFirst = false;
+            BadgeText = string.Empty;
+            LiveFolderFilter = string.Empty;
+            LiveFolderRecentMode = false;
+            ShowNotificationBadges = true;
         }
 
         public void EnsureDefaults()
@@ -289,6 +411,8 @@ namespace WinBins.Models
             if (Hotkey == null) Hotkey = string.Empty;
             if (LiveFolderPath == null) LiveFolderPath = string.Empty;
             if (AccentColorHex == null) AccentColorHex = string.Empty;
+            if (BadgeText == null) BadgeText = string.Empty;
+            if (LiveFolderFilter == null) LiveFolderFilter = string.Empty;
 
             if (Items == null)
             {
@@ -307,6 +431,8 @@ namespace WinBins.Models
     {
         public const string ShellAppsPrefix = @"shell:AppsFolder\";
         public const string SystemPrefix = "bin://system/";
+        public const string SubBinPrefix = "bin://subbin/";
+        public const string SnippetPrefix = "bin://snippet/";
 
         [DataMember(Order = 1)]
         public string Id { get; set; } = Guid.NewGuid().ToString("N").Substring(0, 10);
@@ -397,6 +523,14 @@ namespace WinBins.Models
             {
                 Kind = BinItemKind.SystemCommand;
             }
+            else if (!string.IsNullOrWhiteSpace(TargetPath) && IsSubBin(TargetPath))
+            {
+                Kind = BinItemKind.SubBin;
+            }
+            else if (!string.IsNullOrWhiteSpace(TargetPath) && IsSnippet(TargetPath))
+            {
+                Kind = BinItemKind.Snippet;
+            }
             else if (!string.IsNullOrWhiteSpace(TargetPath) && IsWebUrl(TargetPath))
             {
                 Kind = BinItemKind.WebUrl;
@@ -480,6 +614,58 @@ namespace WinBins.Models
             };
         }
 
+        public static BinItem FromSubBin(string targetBinId, string displayName)
+        {
+            string cleanId = (targetBinId ?? string.Empty).Trim();
+            if (cleanId.StartsWith(SubBinPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                cleanId = cleanId.Substring(SubBinPrefix.Length);
+            }
+
+            return new BinItem
+            {
+                Id = Guid.NewGuid().ToString("N").Substring(0, 10),
+                Name = string.IsNullOrWhiteSpace(displayName) ? "Sub-Bin" : displayName.Trim(),
+                TargetPath = SubBinPrefix + cleanId,
+                Kind = BinItemKind.SubBin,
+                IncludeInOpenAll = false
+            };
+        }
+
+        public static BinItem FromSnippet(string displayName, string snippetText)
+        {
+            string id = Guid.NewGuid().ToString("N").Substring(0, 10);
+            return new BinItem
+            {
+                Id = id,
+                Name = string.IsNullOrWhiteSpace(displayName) ? "Quick Snippet" : displayName.Trim(),
+                TargetPath = SnippetPrefix + id,
+                Arguments = snippetText ?? string.Empty,
+                Kind = BinItemKind.Snippet,
+                IncludeInOpenAll = false
+            };
+        }
+
+        public static bool IsSubBin(string value)
+        {
+            return !string.IsNullOrWhiteSpace(value) &&
+                   value.Trim().StartsWith(SubBinPrefix, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static string GetSubBinId(string value)
+        {
+            if (!IsSubBin(value))
+                return string.Empty;
+
+            return value.Trim().Substring(SubBinPrefix.Length).Trim('/');
+        }
+
+        public static bool IsSnippet(string value)
+        {
+            return !string.IsNullOrWhiteSpace(value) &&
+                   value.Trim().StartsWith(SnippetPrefix, StringComparison.OrdinalIgnoreCase);
+        }
+
         public static bool IsSystemCommand(string value)
         {
             return !string.IsNullOrWhiteSpace(value) &&
@@ -507,6 +693,13 @@ namespace WinBins.Models
                 case "taskmgr": return "Task Manager";
                 case "settings": return "Windows Settings";
                 case "powershell": return "PowerShell Command";
+                case "mute": return "Toggle Mute";
+                case "playpause": return "Play / Pause";
+                case "nexttrack": return "Next Track";
+                case "prevtrack": return "Previous Track";
+                case "toggletheme": return "Toggle Dark / Light";
+                case "clearclipboard": return "Clear Clipboard";
+                case "soundsettings": return "Audio Output";
                 default: return "System Action";
             }
         }
@@ -584,6 +777,12 @@ namespace WinBins.Models
 
             if (IsSystemCommand(path))
                 return BinItemKind.SystemCommand;
+
+            if (IsSubBin(path))
+                return BinItemKind.SubBin;
+
+            if (IsSnippet(path))
+                return BinItemKind.Snippet;
 
             if (IsPackagedApp(path))
                 return BinItemKind.PackagedApp;

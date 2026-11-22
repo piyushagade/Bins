@@ -203,7 +203,11 @@ namespace WinBins.Services
                 }
             }
 
-            Color accentColor = ResolveAccentDrawingColor(bin.AccentColorHex);
+            bool hasUnread = bin.ShowNotificationBadges &&
+                             runningApps.Any(r => RunningAppsTaskbarManager.GetUnreadCountForWindows(r.Windows) > 0);
+            Color accentColor = hasUnread
+                ? Color.FromArgb(255, 255, 92, 108)
+                : ResolveAccentDrawingColor(bin.AccentColorHex);
             bool lightTheme = FluentTheme.IsLightThemeActive;
             double scale = Math.Max(1.0, btnRect.Height / 48.0);
             int maxStripWidth = Math.Max(20, (int)Math.Floor(btnRect.Width - 4 * scale));

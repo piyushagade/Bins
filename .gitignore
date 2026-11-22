@@ -1,6 +1,7 @@
 # Build results
 [Bb]in/
 [Oo]bj/
+dist/
 
 # Visual Studio / Rider / IDE files
 .vs/

@@ -204,6 +204,7 @@ namespace WinBins.Services
                         }
                     }
 
+                    configService.CreateAutoBackupSnapshot(force: true);
                     File.WriteAllBytes(configService.ConfigFilePath, configBytes);
                     configService.Load();
                     // Re-save remapped paths & trigger ConfigChanged

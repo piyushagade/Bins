@@ -628,6 +628,47 @@ namespace WinBins.Services
             }
         }
 
+        private static readonly System.Text.RegularExpressions.Regex LeadingParenBadgeRegex =
+            new System.Text.RegularExpressions.Regex(@"^\s*[\(\[](\d{1,3})\+?[\)\]]\s+", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static readonly System.Text.RegularExpressions.Regex TrailingParenBadgeRegex =
+            new System.Text.RegularExpressions.Regex(@"\s+[\(\[](\d{1,3})\+?[\)\]]\s*$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        /// <summary>
+        /// Parses unread/notification counts commonly embedded in app window titles (e.g., "(3) Slack", "[12] Outlook", "Discord (5)").
+        /// </summary>
+        public static int ExtractUnreadCountFromTitle(string title)
+        {
+            if (string.IsNullOrWhiteSpace(title))
+                return 0;
+
+            var m = LeadingParenBadgeRegex.Match(title);
+            if (m.Success && int.TryParse(m.Groups[1].Value, out int n1) && n1 > 0)
+                return n1;
+
+            m = TrailingParenBadgeRegex.Match(title);
+            if (m.Success && int.TryParse(m.Groups[1].Value, out int n2) && n2 > 0)
+                return n2;
+
+            return 0;
+        }
+
+        public static int GetUnreadCountForWindows(IEnumerable<RunningWindowEntry> windows)
+        {
+            if (windows == null)
+                return 0;
+
+            int total = 0;
+            foreach (RunningWindowEntry win in windows)
+            {
+                if (win != null && !string.IsNullOrWhiteSpace(win.Title))
+                {
+                    total += ExtractUnreadCountFromTitle(win.Title);
+                }
+            }
+            return total;
+        }
+
         /// <summary>
         /// Single-pass lookup returning all currently running items and their open windows for a BinGroup.
         /// </summary>

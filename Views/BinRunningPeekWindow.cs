@@ -37,6 +37,8 @@ namespace WinBins.Views
         private readonly ScrollViewer _rowsScroll;
 
         private readonly DispatcherTimer _dismissTimer;
+        private readonly List<Tuple<IntPtr, FrameworkElement>> _pendingThumbHosts = new List<Tuple<IntPtr, FrameworkElement>>();
+        private readonly List<Tuple<IntPtr, IntPtr, FrameworkElement>> _activeThumbnails = new List<Tuple<IntPtr, IntPtr, FrameworkElement>>();
         private BinGroup _currentBin;
         private System.Drawing.Point _lastAnchorPx;
         private IntPtr _priorForegroundHwnd;
@@ -187,8 +189,11 @@ namespace WinBins.Views
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 MaxHeight = 260,
+                FocusVisualStyle = null,
                 Content = _rowsPanel
             };
+            _rowsScroll.ScrollChanged += (_, __) => UpdateDwmThumbnailRects();
+            Closed += (_, __) => ClearActiveThumbnails();
             rootStack.Children.Add(_rowsScroll);
 
             _animRoot.Children.Add(rootStack);
@@ -198,12 +203,13 @@ namespace WinBins.Views
 
         private void ApplyDwmStyling(IntPtr hwnd)
         {
-            bool useAcrylic = _configService.Current?.UseAcrylicFlyout ?? true;
-            Win32Interop.ApplyWindows11WindowStyling(
+            BinBackdropStyle backdrop = _configService.Current?.FlyoutBackdrop ?? BinBackdropStyle.Acrylic;
+            int opacity = _configService.Current?.FlyoutOpacityPercent ?? 82;
+            Win32Interop.ApplyFlyoutBackdropAndOpacity(
                 hwnd,
-                useMica: false,
-                useAcrylic: useAcrylic,
-                forceDarkMode: !FluentTheme.IsLightThemeActive);
+                (int)backdrop,
+                opacity,
+                FluentTheme.IsLightThemeActive);
         }
 
         public bool TryShowForBin(BinGroup bin, System.Drawing.Point anchorScreenPx)
@@ -257,8 +263,18 @@ namespace WinBins.Views
                 ApplyDwmStyling(hwnd);
             }
 
+            bool useThumbnails = _configService.Current?.ShowLiveWindowThumbnails ?? true;
+            if (useThumbnails)
+            {
+                _slideTransform.Y = 0;
+                Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(SyncDwmThumbnails));
+            }
+            else
+            {
+                PlayEntranceAnimation();
+            }
+
             _dismissTimer.Start();
-            PlayEntranceAnimation();
             return true;
         }
 
@@ -266,14 +282,150 @@ namespace WinBins.Views
         {
             _dismissTimer.Stop();
             _outsideStartTick = 0;
+            ClearActiveThumbnails();
             if (IsVisible)
             {
                 Hide();
             }
         }
 
+        private void ClearActiveThumbnails()
+        {
+            foreach (var entry in _activeThumbnails)
+            {
+                if (entry.Item1 != IntPtr.Zero)
+                {
+                    try { Win32Interop.DwmUnregisterThumbnail(entry.Item1); } catch { }
+                }
+            }
+            _activeThumbnails.Clear();
+            _pendingThumbHosts.Clear();
+        }
+
+        private void SyncDwmThumbnails()
+        {
+            IntPtr destHwnd = new WindowInteropHelper(this).Handle;
+            if (destHwnd == IntPtr.Zero || !IsVisible)
+                return;
+
+            // Unregister previous handles before registering fresh ones
+            foreach (var entry in _activeThumbnails)
+            {
+                if (entry.Item1 != IntPtr.Zero)
+                {
+                    try { Win32Interop.DwmUnregisterThumbnail(entry.Item1); } catch { }
+                }
+            }
+            _activeThumbnails.Clear();
+
+            foreach (var hostEntry in _pendingThumbHosts)
+            {
+                IntPtr srcHwnd = hostEntry.Item1;
+                FrameworkElement host = hostEntry.Item2;
+                if (srcHwnd == IntPtr.Zero || !Win32Interop.IsWindow(srcHwnd) || host == null)
+                    continue;
+
+                if (Win32Interop.DwmRegisterThumbnail(destHwnd, srcHwnd, out IntPtr thumbHandle) == 0 &&
+                    thumbHandle != IntPtr.Zero)
+                {
+                    _activeThumbnails.Add(Tuple.Create(thumbHandle, srcHwnd, host));
+                }
+            }
+
+            UpdateDwmThumbnailRects();
+        }
+
+        private void UpdateDwmThumbnailRects()
+        {
+            if (_activeThumbnails.Count == 0 || !IsVisible)
+                return;
+
+            PresentationSource source = PresentationSource.FromVisual(this);
+            Matrix toDevice = source?.CompositionTarget?.TransformToDevice ?? Matrix.Identity;
+            double dpiX = toDevice.M11 > 0 ? toDevice.M11 : 1.0;
+            double dpiY = toDevice.M22 > 0 ? toDevice.M22 : 1.0;
+
+            Point scrollTopLeft = _rowsScroll.TransformToAncestor(this).Transform(new Point(0, 0));
+            Rect visibleScrollBounds = new Rect(
+                scrollTopLeft.X,
+                scrollTopLeft.Y,
+                _rowsScroll.ViewportWidth > 0 ? _rowsScroll.ViewportWidth : _rowsScroll.ActualWidth,
+                _rowsScroll.ViewportHeight > 0 ? _rowsScroll.ViewportHeight : _rowsScroll.ActualHeight);
+
+            foreach (var entry in _activeThumbnails)
+            {
+                IntPtr thumbHandle = entry.Item1;
+                FrameworkElement host = entry.Item3;
+                if (thumbHandle == IntPtr.Zero || host == null || host.ActualWidth <= 2 || host.ActualHeight <= 2)
+                    continue;
+
+                try
+                {
+                    Point topLeftDip = host.TransformToAncestor(this).Transform(new Point(0, 0));
+                    Rect hostRectDip = new Rect(topLeftDip.X, topLeftDip.Y, host.ActualWidth, host.ActualHeight);
+
+                    // Hide thumbnail if scrolled completely outside the horizontal scroll viewport
+                    bool fullyVisible = visibleScrollBounds.Width <= 0 ||
+                                        (hostRectDip.Left >= visibleScrollBounds.Left - 4 &&
+                                         hostRectDip.Right <= visibleScrollBounds.Right + 4);
+
+                    if (!fullyVisible)
+                    {
+                        var hideProps = new Win32Interop.DWM_THUMBNAIL_PROPERTIES
+                        {
+                            dwFlags = Win32Interop.DWM_TNP_VISIBLE,
+                            fVisible = false
+                        };
+                        Win32Interop.DwmUpdateThumbnailProperties(thumbHandle, ref hideProps);
+                        continue;
+                    }
+
+                    double boxW = hostRectDip.Width * dpiX;
+                    double boxH = hostRectDip.Height * dpiY;
+                    double destX = hostRectDip.Left * dpiX;
+                    double destY = hostRectDip.Top * dpiY;
+                    double destW = boxW;
+                    double destH = boxH;
+
+                    // Preserve source window aspect ratio centered neatly inside the preview box
+                    if (Win32Interop.DwmQueryThumbnailSourceSize(thumbHandle, out Win32Interop.PSIZE srcSize) == 0 &&
+                        srcSize.x > 0 && srcSize.y > 0)
+                    {
+                        double scale = Math.Min(boxW / srcSize.x, boxH / srcSize.y);
+                        destW = Math.Max(16.0, srcSize.x * scale);
+                        destH = Math.Max(16.0, srcSize.y * scale);
+                        destX += (boxW - destW) / 2.0;
+                        destY += (boxH - destH) / 2.0;
+                    }
+
+                    var props = new Win32Interop.DWM_THUMBNAIL_PROPERTIES
+                    {
+                        dwFlags = Win32Interop.DWM_TNP_RECTDESTINATION |
+                                  Win32Interop.DWM_TNP_OPACITY |
+                                  Win32Interop.DWM_TNP_VISIBLE |
+                                  Win32Interop.DWM_TNP_SOURCECLIENTAREAONLY,
+                        rcDestination = new Win32Interop.RECT
+                        {
+                            Left = (int)Math.Round(destX),
+                            Top = (int)Math.Round(destY),
+                            Right = (int)Math.Round(destX + destW),
+                            Bottom = (int)Math.Round(destY + destH)
+                        },
+                        opacity = 255,
+                        fVisible = true,
+                        fSourceClientAreaOnly = false
+                    };
+                    Win32Interop.DwmUpdateThumbnailProperties(thumbHandle, ref props);
+                }
+                catch
+                {
+                }
+            }
+        }
+
         private bool RebuildRows(List<BinRunningAppSummary> preloaded = null)
         {
+            ClearActiveThumbnails();
             _rowsPanel.Children.Clear();
             if (_currentBin == null)
                 return false;
@@ -282,6 +434,24 @@ namespace WinBins.Views
             int totalWindows = running.Sum(r => r.Windows?.Count ?? 0);
             if (totalWindows == 0)
                 return false;
+
+            bool useThumbnails = _configService.Current?.ShowLiveWindowThumbnails ?? true;
+            if (useThumbnails)
+            {
+                _outerBorder.MaxWidth = 920;
+                _rowsPanel.Orientation = Orientation.Horizontal;
+                _rowsScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+                _rowsScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+                _rowsScroll.MaxHeight = 200;
+            }
+            else
+            {
+                _outerBorder.MaxWidth = 310;
+                _rowsPanel.Orientation = Orientation.Vertical;
+                _rowsScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+                _rowsScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+                _rowsScroll.MaxHeight = 260;
+            }
 
             Brush binAccent = FluentTheme.GetEffectiveAccentBrush(_currentBin.AccentColorHex);
             _accentDot.Background = binAccent;
@@ -296,13 +466,172 @@ namespace WinBins.Views
                 ImageSource iconSrc = _iconService.GetItemImageSource(appGroup.Item);
                 foreach (RunningWindowEntry win in appGroup.Windows)
                 {
-                    _rowsPanel.Children.Add(CreateWindowRow(appGroup.Item, win, iconSrc, binAccent));
+                    if (useThumbnails)
+                    {
+                        _rowsPanel.Children.Add(CreateThumbnailCard(appGroup.Item, win, iconSrc, binAccent));
+                    }
+                    else
+                    {
+                        _rowsPanel.Children.Add(CreateWindowRow(appGroup.Item, win, iconSrc, binAccent));
+                    }
                 }
             }
 
             _rowsPanel.InvalidateMeasure();
             _rowsScroll.InvalidateMeasure();
             return true;
+        }
+
+        private Border CreateThumbnailCard(BinItem item, RunningWindowEntry win, ImageSource iconSrc, Brush binAccent)
+        {
+            bool isFocused = (win.Hwnd == _priorForegroundHwnd || win.IsForeground) && !win.IsMinimized;
+
+            Brush idleBg = isFocused
+                ? FluentTheme.GetTintedPillBgBrush(_currentBin?.AccentColorHex, 30)
+                : FluentTheme.CardBg;
+            Brush idleBorder = isFocused
+                ? FluentTheme.GetTintedPillBgBrush(_currentBin?.AccentColorHex, 110)
+                : FluentTheme.CardBorder;
+
+            var card = new Border
+            {
+                Width = 216,
+                Background = idleBg,
+                BorderBrush = idleBorder,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(7),
+                Padding = new Thickness(8, 6, 8, 8),
+                Margin = new Thickness(3, 2, 3, 2),
+                Cursor = Cursors.Hand,
+                ToolTip = isFocused ? $"{win.Title} (Click to minimize)" : win.Title
+            };
+
+            var stack = new StackPanel();
+
+            // Header bar: [16x16 icon] [Window title] [x close]
+            var headerGrid = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var iconImg = new Image
+            {
+                Width = 16,
+                Height = 16,
+                Source = iconSrc,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 7, 0)
+            };
+            RenderOptions.SetBitmapScalingMode(iconImg, BitmapScalingMode.HighQuality);
+            Grid.SetColumn(iconImg, 0);
+            headerGrid.Children.Add(iconImg);
+
+            string titleText = !string.IsNullOrWhiteSpace(win.Title) ? win.Title : item.Name;
+            var titleBlock = new TextBlock
+            {
+                Text = titleText,
+                FontSize = 11.5,
+                FontWeight = isFocused ? FontWeights.SemiBold : FontWeights.Normal,
+                Foreground = win.IsMinimized ? FluentTheme.TextMuted : FluentTheme.TextPrimary,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            Grid.SetColumn(titleBlock, 1);
+            headerGrid.Children.Add(titleBlock);
+
+            var closeIcon = new TextBlock
+            {
+                Text = "\uE711",
+                FontFamily = FluentTheme.IconFont,
+                FontSize = 9,
+                Foreground = FluentTheme.TextMuted,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var closeBtn = new Border
+            {
+                Width = 20,
+                Height = 20,
+                CornerRadius = new CornerRadius(4),
+                Background = Brushes.Transparent,
+                Margin = new Thickness(4, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Opacity = 0.65,
+                ToolTip = "Close window",
+                Child = closeIcon
+            };
+            closeBtn.MouseEnter += (_, __) =>
+            {
+                closeBtn.Opacity = 1.0;
+                closeBtn.Background = FluentTheme.BrushFromHex("#CC C42B1C".Replace(" ", ""));
+                closeIcon.Foreground = Brushes.White;
+            };
+            closeBtn.MouseLeave += (_, __) =>
+            {
+                closeBtn.Opacity = 0.65;
+                closeBtn.Background = Brushes.Transparent;
+                closeIcon.Foreground = FluentTheme.TextMuted;
+            };
+            closeBtn.MouseLeftButtonDown += (s, e) => e.Handled = true;
+            closeBtn.MouseLeftButtonUp += (s, e) =>
+            {
+                CloseWindowAndRefresh(win.Hwnd);
+                e.Handled = true;
+            };
+            Grid.SetColumn(closeBtn, 2);
+            headerGrid.Children.Add(closeBtn);
+            stack.Children.Add(headerGrid);
+
+            // Live DWM preview viewport host
+            var previewHost = new Border
+            {
+                Width = 198,
+                Height = 114,
+                CornerRadius = new CornerRadius(5),
+                Background = FluentTheme.BrushFromHex("#18000000"),
+                BorderBrush = FluentTheme.SubtleBorder,
+                BorderThickness = new Thickness(1)
+            };
+            _pendingThumbHosts.Add(Tuple.Create(win.Hwnd, (FrameworkElement)previewHost));
+            stack.Children.Add(previewHost);
+
+            card.Child = stack;
+
+            card.MouseEnter += (_, __) =>
+            {
+                card.Background = FluentTheme.GetTintedPillBgBrush(_currentBin?.AccentColorHex, 46);
+                card.BorderBrush = FluentTheme.GetTintedPillBgBrush(_currentBin?.AccentColorHex, 125);
+                closeBtn.Opacity = 1.0;
+            };
+            card.MouseLeave += (_, __) =>
+            {
+                card.Background = idleBg;
+                card.BorderBrush = idleBorder;
+                closeBtn.Opacity = 0.65;
+            };
+            card.MouseLeftButtonUp += (s, e) =>
+            {
+                HidePeek();
+                if (isFocused && Win32Interop.IsWindow(win.Hwnd) && !Win32Interop.IsIconic(win.Hwnd))
+                {
+                    Win32Interop.MinimizeWindow(win.Hwnd);
+                }
+                else
+                {
+                    Win32Interop.ActivateAndRestoreWindow(win.Hwnd);
+                }
+                e.Handled = true;
+            };
+            card.MouseUp += (s, e) =>
+            {
+                if (e.ChangedButton == MouseButton.Middle)
+                {
+                    CloseWindowAndRefresh(win.Hwnd);
+                    e.Handled = true;
+                }
+            };
+
+            return card;
         }
 
         private Border CreateWindowRow(BinItem item, RunningWindowEntry win, ImageSource iconSrc, Brush binAccent)
@@ -509,6 +838,10 @@ namespace WinBins.Views
                 {
                     UpdateLayout();
                     PositionAboveAnchor(_lastAnchorPx);
+                    if (_configService.Current?.ShowLiveWindowThumbnails ?? true)
+                    {
+                        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(SyncDwmThumbnails));
+                    }
                 }
             };
             refreshDelay.Start();

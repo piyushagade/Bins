@@ -14,11 +14,14 @@ namespace WinBins.Services
         private const string RunRegistryKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string RunRegistryValueName = "WinBins";
         private const string SyncPointerFileName = "sync_folder.txt";
+        private const int MaxAutoBackupSnapshots = 5;
+        private DateTime _lastAutoBackupUtc = DateTime.MinValue;
 
         public string BaseAppDataFolder { get; }
         public string AppDataFolder { get; private set; }
         public string IconsFolder { get; private set; }
         public string ShortcutsFolder { get; private set; }
+        public string BackupsFolder { get; private set; }
         public string ConfigFilePath { get; private set; }
         public string CustomSyncFolder { get; private set; }
 
@@ -39,6 +42,8 @@ namespace WinBins.Services
             Directory.CreateDirectory(BaseAppDataFolder);
             ShortcutsFolder = Path.Combine(BaseAppDataFolder, "Shortcuts");
             Directory.CreateDirectory(ShortcutsFolder);
+            BackupsFolder = Path.Combine(BaseAppDataFolder, "backups");
+            Directory.CreateDirectory(BackupsFolder);
 
             ResolveStoragePaths();
         }
@@ -211,6 +216,11 @@ namespace WinBins.Services
             Current.EnsureDefaults();
             try
             {
+                if (File.Exists(ConfigFilePath))
+                {
+                    CreateAutoBackupSnapshot(force: false);
+                }
+
                 string tempPath = ConfigFilePath + ".tmp";
                 using (var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
                 using (var writer = JsonReaderWriterFactory.CreateJsonWriter(fs, Encoding.UTF8, true, true, "  "))
@@ -231,11 +241,123 @@ namespace WinBins.Services
             }
 
             ApplyStartupSetting(Current.LaunchAtStartup);
+            ShellContextMenuService.SyncExplorerContextMenu(Current);
 
             if (notify)
             {
                 ConfigChanged?.Invoke();
             }
+        }
+
+        public void CreateAutoBackupSnapshot(bool force = false)
+        {
+            try
+            {
+                if (!File.Exists(ConfigFilePath))
+                    return;
+
+                DateTime nowUtc = DateTime.UtcNow;
+                if (!force && (nowUtc - _lastAutoBackupUtc).TotalMinutes < 5)
+                    return;
+
+                Directory.CreateDirectory(BackupsFolder);
+                string fileName = $"config_{DateTime.Now:yyyyMMdd_HHmmss}.json";
+                string destPath = Path.Combine(BackupsFolder, fileName);
+                File.Copy(ConfigFilePath, destPath, overwrite: true);
+                _lastAutoBackupUtc = nowUtc;
+
+                // Prune older snapshots, keeping the newest MaxAutoBackupSnapshots
+                var files = new DirectoryInfo(BackupsFolder).GetFiles("config_*.json");
+                Array.Sort(files, (a, b) => b.LastWriteTimeUtc.CompareTo(a.LastWriteTimeUtc));
+                for (int i = MaxAutoBackupSnapshots; i < files.Length; i++)
+                {
+                    try { files[i].Delete(); } catch { }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        public List<FileInfo> ListAutoBackupSnapshots()
+        {
+            var result = new List<FileInfo>();
+            try
+            {
+                if (!Directory.Exists(BackupsFolder))
+                    return result;
+
+                var files = new DirectoryInfo(BackupsFolder).GetFiles("config_*.json");
+                Array.Sort(files, (a, b) => b.LastWriteTimeUtc.CompareTo(a.LastWriteTimeUtc));
+                result.AddRange(files);
+            }
+            catch
+            {
+            }
+            return result;
+        }
+
+        public bool RestoreAutoBackupSnapshot(string snapshotFilePath)
+        {
+            if (string.IsNullOrWhiteSpace(snapshotFilePath) || !File.Exists(snapshotFilePath))
+                return false;
+
+            try
+            {
+                byte[] raw = File.ReadAllBytes(snapshotFilePath);
+                using (var ms = new MemoryStream(raw))
+                {
+                    var ser = new DataContractJsonSerializer(typeof(AppConfig));
+                    var parsed = ser.ReadObject(ms) as AppConfig;
+                    if (parsed == null)
+                        return false;
+                }
+
+                CreateAutoBackupSnapshot(force: true);
+                File.WriteAllBytes(ConfigFilePath, raw);
+                Load();
+                Save(notify: true);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public bool ApplyProfile(string profileIdOrAll)
+        {
+            if (Current == null)
+                return false;
+
+            if (string.IsNullOrWhiteSpace(profileIdOrAll) ||
+                string.Equals(profileIdOrAll, "all", StringComparison.OrdinalIgnoreCase))
+            {
+                Current.ActiveProfileId = string.Empty;
+                foreach (BinGroup bin in Current.Bins)
+                {
+                    bin.IsEnabledOnTaskbar = true;
+                }
+                Save(notify: true);
+                return true;
+            }
+
+            BinProfile profile = Current.Profiles?.Find(p =>
+                string.Equals(p.Id, profileIdOrAll, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(p.Name, profileIdOrAll, StringComparison.OrdinalIgnoreCase));
+
+            if (profile == null)
+                return false;
+
+            Current.ActiveProfileId = profile.Id;
+            var enabledSet = new HashSet<string>(profile.EnabledBinIds ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+            foreach (BinGroup bin in Current.Bins)
+            {
+                bin.IsEnabledOnTaskbar = enabledSet.Contains(bin.Id);
+            }
+
+            Save(notify: true);
+            return true;
         }
 
         public void ApplyStartupSetting(bool enabled)

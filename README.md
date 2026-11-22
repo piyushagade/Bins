@@ -1,42 +1,40 @@
 # Bins for Windows 11
 
-A native Windows 11 grouped taskbar icon launcher (**v1.4.6**), built with C#, WPF (WinUI 3 Dark / Light / System Fluent styling), and Win32 Shell / DWM COM Interop.
+A native Windows 11 grouped taskbar icon launcher (**v1.5.0**), built with C#, WPF (WinUI 3 Dark / Light / System Fluent styling), and Win32 Shell / DWM COM Interop.
 
 ## Features
 
-1. **Grid Mosaic Icon, Frosted & Colored Backplates, or Custom Icon**:
-   - **Grid Mosaic View**: Dynamically renders up to 4 sub-icons onto a `128×128` ARGB canvas (`Win32Interop.CreateGroupMosaicIconHandle`) with lossless 32-bit alpha, with an optional frosted rounded squircle **Icon backplate** per Bin.
-   - **Per-Bin Color Tints**: Tint any Bin's taskbar squircle backplate, flyout title, active category pills, running-app indicators, and search badges with preset Windows 11 accent colors (`Blue`, `Cyan`, `Emerald`, `Amber`, `Rose`, `Purple`, `Pink`).
-   - **Custom Icon**: Choose from a built-in gallery of Windows 11 icons (`imageres.dll` / `shell32.dll`) or browse any `.ico`, `.png`, `.jpg`, `.bmp`, `.exe`, or `.dll`.
+1. **Multi-Style Mosaic Icons, Emoji/Monogram Badges, Frosted Backplates & Custom Icons**:
+   - **Icon Styles**: Choose between **2×2 Grid Mosaic**, **3×3 Mini-Grid**, **Fanned Stack** (layered tilted cards), **Emoji / Monogram Badge** (tinted gradient squircle with custom emoji or 1–3 letter monogram), or **Custom Icon** (built-in Windows 11 gallery or any `.ico`, `.png`, `.jpg`, `.bmp`, `.exe`, `.dll`).
+   - **Per-Bin Color Tints & Backplates**: Optional frosted rounded squircle **Icon backplate** and Windows 11 accent color tints (`Blue`, `Cyan`, `Emerald`, `Amber`, `Rose`, `Purple`, `Pink`) across taskbar icons, flyout titles, category pills, and running indicators.
 
-2. **Apps, Microsoft Store / UWP Apps, Folders, Websites, System Tiles & Smart Live Folders**:
+2. **Apps, Store/UWP Apps, Folders, Websites, Utility Tiles, Snippets, Nested Sub-Bins & Smart Live Folders**:
    - Add classic Start Menu apps **and** packaged **Microsoft Store / UWP apps** (`shell:AppsFolder`) from a unified searchable picker
-   - Add `.exe` applications, `.lnk` / `.url` shortcuts, scripts, or documents
-   - Add **Folders** with **Quick Folder Peek** (hover chevron inside the flyout or right-click **Peek folder** to browse nested subfolders and files directly from the menu)
-   - Add **Smart Live Folders**: Connect any Bin to a live directory (e.g., `Downloads`, `Desktop`, `Documents`, or custom folder) with configurable sorting (`Newest`, `Name`, `Type`) and item cap, drag files **out** of the flyout or **into** a Smart Bin, or pin live items permanently
-   - Add **Websites / URLs** (opens in your default browser and automatically fetches high-DPI site favicons)
-   - Add **Built-in System & Power Tiles**: Live **Recycle Bin** (dynamically switches empty/full icon, shows item count & byte size, accepts dropped files to recycle, and right-click **Empty Recycle Bin**), **Screen Snip**, **Task Manager**, **Windows Settings**, **Lock PC**, **Sleep**, **Restart**, **Shut Down**, and custom **PowerShell** one-liners
+   - Add `.exe` applications, `.lnk` / `.url` shortcuts, scripts, documents, or **Folders** with **Quick Folder Peek**
+   - Add **Smart Live Folders & Windows Recent Files**: Mirror any live directory (`Downloads`, `Desktop`, `Documents`, etc.) **or** your **Windows Recent Items**, with optional extension filtering (e.g., `*.pdf;*.docx`), configurable sorting (`Newest`, `Name`, `Type`), and item cap
+   - Add **Nested Sub-Bins**: Place any Bin inside another Bin as a tile and navigate seamlessly inline with Back (`←` / `Backspace`) breadcrumbs
+   - Add **Quick Text Snippet Tiles**: 1-click tiles that copy frequently used commands, replies, or templates straight to the clipboard
+   - Add **Built-in System, Media & Utility Tiles**: Live **Recycle Bin**, **Screen Snip**, **Task Manager**, **Windows Settings**, **Toggle Mute**, **Play / Pause**, **Next / Previous Track**, **Audio Output Switcher**, **Toggle Windows Dark / Light Mode**, **Clear Clipboard**, **Lock / Sleep / Restart / Shut Down**, and custom **PowerShell** one-liners
 
-3. **Named Categories / Pill Tabs & Per-Item Launch Properties**:
-   - **Categories (`Tabs` or `Headers`)**: Organize items inside a Bin into named categories displayed either as horizontal WinUI 3 pill tabs (`Tab` / `Shift+Tab` to cycle) or stacked section headers
-   - **Per-Item Properties Dialog**: Configure custom command-line arguments, working directory, window state (`Normal` / `Maximized` / `Minimized`), **Always run as administrator** (with UAC shield badge), and **Smart Workspace ("Open all")** inclusion & staggered launch delay
+3. **Profiles, Explorer Context Menu, Health Checker & Categories**:
+   - **Bin Profiles**: Save and switch taskbar Bin layouts (*Work*, *Dev*, *Gaming*, *All Bins*) in 1 click from Settings, the System Tray menu, or CLI (`Bins.exe --profile <name>`)
+   - **File Explorer "Add to Bin" Context Menu**: Optional per-user right-click menu in File Explorer (`HKCU`, no admin required) to send any file, app, or folder directly into any Bin
+   - **Broken Link & Duplicate Checker**: Automatically flags missing targets (`Missing`) and duplicates (`Duplicate`) in Bins Manager with 1-click **Relocate** and cleanup actions
+   - **Categories (`Tabs` or `Headers`) & Per-Item Properties**: Organize items into named category tabs/headers with custom arguments, working directory, window state, UAC elevation, and staggered **Open workspace** delays
 
-4. **Running-App Window Switcher & Drag-and-Drop Power Workflows**:
+4. **Running-App Window Switcher, Unread Notification Badges & Drag-and-Drop Power Workflows**:
+   - **Live Notification / Unread Badges**: Automatically parses unread counts from running app titles (e.g., `(3) Slack`, `[12] Outlook`) and displays red notification badges on flyout tiles and taskbar indicator dots
    - **Running-App Taskbar Dots, Hover Peek & Switcher**: Native click-through Windows 11 multi-dot / active-pill indicators under taskbar Bins, compact Acrylic **"Open in Bin"** hover preview strip (`×` close + 1-click focus/minimize), accented running tile cards with multi-window count badges (`2`, `3`, ...), and optional **Float open apps first** per Bin
-   - **Drop Files Onto App, Folder, or Recycle Bin Tiles**: Drag a file over a Bin's taskbar icon to pop open its flyout automatically, then drop onto an **App** tile to open with that app, a **Folder** tile to move/copy (`SHFileOperationW`), or the **Recycle Bin** tile to delete with Undo support
-   - **Drag-and-Drop Reordering & Cross-Bin Move**: Reorder tiles directly inside the flyout, reorder items and Bins in Bins Manager, or drag items onto another Bin in the sidebar to move them
+   - **Drop Files Onto App, Folder, or Recycle Bin Tiles** & full drag-and-drop reordering / cross-Bin move
 
 5. **Global Cross-Bin Omni-Search, Hotkeys & Hover-to-Open**:
-   - **Global Cross-Bin Search (`Ctrl+Alt+Space`)**: Spotlight-style WinUI 3 launcher searches across every Bin and Smart Live Folder from anywhere (with customizable global shortcut, `Ctrl+K` inside Bins Manager, `--search` Jump List task, and system tray item)
-   - **Per-Bin Global Hotkeys**: Assign custom system-wide shortcuts (e.g. `Alt+1`, `Ctrl+Shift+C`) in **Flyout options** to toggle any Bin instantly
-   - **Flyout Keyboard Navigation**: Press `1`–`9` to launch/switch to tiles immediately, `Tab` to switch category tabs, arrow keys + `Enter` to navigate, or start typing to filter items inline
-   - **Hover-to-Open Mode**: Optional classic Bins behavior in **Settings** pops open a Bin's flyout when hovering over its taskbar icon and auto-dismisses when leaving
+   - **Global Cross-Bin Search (`Ctrl+Alt+Space`)**: Spotlight-style WinUI 3 launcher searches across every Bin and Smart Live Folder from anywhere
+   - **Per-Bin Global Hotkeys**, **Flyout Keyboard Navigation** (`1`–`9`, `Tab`, arrows, inline filter), and optional **Hover-to-Open Mode**
 
-6. **Windows 11 Taskbar Integration, Smart Workspaces, Themes, Backup & Cloud Sync**:
-   - **Taskbar Pinning & Native Jump Lists**: Pin any Bin on the Windows 11 Taskbar (`System.AppUserModel.ID` + `ICustomDestinationList`) for right-click Jump List access to items, staggered **Open workspace**, `Edit`, and `Bins settings`
-   - **Keep Open Apps Inside Their Bin**: Optional per-Bin and global toggles prevent open binned apps from appearing separately on the taskbar (`ITaskbarList`) while preserving full `Alt+Tab` / `Win+Tab` / Snap Assist switcher visibility
-   - **Acrylic Blur & Light / Dark / System Theme**: Native Windows 11 DWM Acrylic backdrop blur (`DWMSBT_TRANSIENTWINDOW`) and `Dark` / `Light` / `System` color themes
-   - **Portable `.bins` Backup, Cloud Sync & Update Checker**: One-click `.bins` archive export/import, custom OneDrive / Dropbox sync folder support, and GitHub release update checking
+6. **Windows 11 Taskbar Integration, Flyout Appearance Controls, Auto-Backups & Packaging**:
+   - **Flyout Appearance Controls**: Choose **Acrylic**, **Mica**, or **Solid** backdrop materials, fine-tune **Flyout surface opacity** (`40%–100%`), and scale **Tile icon size** (`24` / `32` / `40` / `48 px`) alongside `Dark` / `Light` / `System` themes
+   - **Taskbar Pinning, Native Jump Lists & Keep Open Apps Inside Their Bin**: Pin any Bin on the Windows 11 Taskbar (`System.AppUserModel.ID` + `ICustomDestinationList`) and optionally keep open binned apps inside their Bin while preserving `Alt+Tab` / `Win+Tab` / Snap Assist
+   - **Rolling Auto-Backups, Portable `.bins` Archive, Cloud Sync & Installer**: Automatically retains the last 5 timestamped config snapshots in `%LOCALAPPDATA%\WinBins\backups` with 1-click restore, plus `.bins` export/import, OneDrive/Dropbox sync, GitHub update checking, Inno Setup script (`installer/Bins.iss`), and WinGet manifest (`installer/winget/PiyushAgade.Bins.yaml`)
 
 ## Build & Run
 
