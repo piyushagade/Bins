@@ -463,12 +463,7 @@ namespace WinBins
 
         private void InitializeSystemTray()
         {
-            IntPtr hIcon = Win32Interop.CreateGroupMosaicIconHandle(null);
-            if (hIcon != IntPtr.Zero)
-            {
-                _trayDrawingIcon = (Icon)Icon.FromHandle(hIcon).Clone();
-                Win32Interop.DestroyIcon(hIcon);
-            }
+            _trayDrawingIcon = IconService.CreateAppDrawingIcon(32);
 
             _trayIcon = new System.Windows.Forms.NotifyIcon
             {

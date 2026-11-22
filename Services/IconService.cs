@@ -863,6 +863,88 @@ namespace WinBins.Services
             return bmp;
         }
 
+        private static BitmapSource _cachedAppIconSource;
+
+        /// <summary>
+        /// Loads the highest-resolution frame from the embedded app.ico resource for WPF windows and UI.
+        /// </summary>
+        public static BitmapSource GetAppIconBitmapSource()
+        {
+            if (_cachedAppIconSource != null)
+                return _cachedAppIconSource;
+
+            try
+            {
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                using (Stream stream = asm.GetManifestResourceStream("WinBins.app.ico"))
+                {
+                    if (stream != null)
+                    {
+                        var decoder = new IconBitmapDecoder(
+                            stream,
+                            BitmapCreateOptions.PreservePixelFormat,
+                            BitmapCacheOption.OnLoad);
+
+                        BitmapFrame best = null;
+                        foreach (BitmapFrame frame in decoder.Frames)
+                        {
+                            if (best == null || frame.PixelWidth > best.PixelWidth)
+                            {
+                                best = frame;
+                            }
+                        }
+
+                        if (best != null)
+                        {
+                            best.Freeze();
+                            _cachedAppIconSource = best;
+                            return best;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            using (var fallback = Win32Interop.CreateGroupMosaicBitmap(null))
+            {
+                _cachedAppIconSource = ConvertBitmapToBitmapSource(fallback);
+                return _cachedAppIconSource;
+            }
+        }
+
+        /// <summary>
+        /// Loads the embedded app.ico resource as a GDI Icon at the requested size for the system tray.
+        /// </summary>
+        public static Icon CreateAppDrawingIcon(int size = 32)
+        {
+            try
+            {
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                using (Stream stream = asm.GetManifestResourceStream("WinBins.app.ico"))
+                {
+                    if (stream != null)
+                    {
+                        return new Icon(stream, new System.Drawing.Size(size, size));
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            IntPtr hIcon = Win32Interop.CreateGroupMosaicIconHandle(null);
+            if (hIcon != IntPtr.Zero)
+            {
+                var cloned = (Icon)Icon.FromHandle(hIcon).Clone();
+                Win32Interop.DestroyIcon(hIcon);
+                return cloned;
+            }
+
+            return null;
+        }
+
         public void Dispose()
         {
             foreach (var kv in _bitmapCache)

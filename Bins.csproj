@@ -101,5 +101,9 @@
     <Compile Include="Views\MainWindow.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="app.ico" />
+  </ItemGroup>
+
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

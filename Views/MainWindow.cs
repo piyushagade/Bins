@@ -207,10 +207,7 @@ namespace WinBins.Views
             _updateCheckService = updateCheckService;
 
             Title = "Bins";
-            using (var appBmp = Win32Interop.CreateGroupMosaicBitmap(null))
-            {
-                Icon = IconService.ConvertBitmapToBitmapSource(appBmp);
-            }
+            Icon = IconService.GetAppIconBitmapSource();
 
             Width = 880;
             Height = 640;
@@ -2612,15 +2609,12 @@ namespace WinBins.Views
                 Margin = new Thickness(0, 0, 16, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
-            using (var mosaicBmp = Win32Interop.CreateGroupMosaicBitmap(null))
+            var appImg = new Image
             {
-                var appImg = new Image
-                {
-                    Source = IconService.ConvertBitmapToBitmapSource(mosaicBmp)
-                };
-                RenderOptions.SetBitmapScalingMode(appImg, BitmapScalingMode.HighQuality);
-                appIconTile.Child = appImg;
-            }
+                Source = IconService.GetAppIconBitmapSource()
+            };
+            RenderOptions.SetBitmapScalingMode(appImg, BitmapScalingMode.HighQuality);
+            appIconTile.Child = appImg;
             Grid.SetColumn(appIconTile, 0);
             heroGrid.Children.Add(appIconTile);
 
