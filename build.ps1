@@ -77,6 +77,8 @@ if ($Package) {
 
     $setupExe = Join-Path $PSScriptRoot "dist\Bins-Setup-$version-x64.exe"
     $hash = (Get-FileHash -Path $setupExe -Algorithm SHA256).Hash
+    $shaFile = Join-Path $PSScriptRoot "dist\SHA256SUMS.txt"
+    "$hash  Bins-Setup-$version-x64.exe" | Set-Content -Path $shaFile -Encoding ascii
     Write-Host "Installer built -> $setupExe" -ForegroundColor Green
     Write-Host "SHA256: $hash" -ForegroundColor Cyan
 }

@@ -2,6 +2,7 @@
 [Bb]in/
 [Oo]bj/
 dist/
+docs/downloads/
 
 # Visual Studio / Rider / IDE files
 .vs/

@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <base href="/bins/" />
+  <title>Bins for Windows 11 — Native Grouped Taskbar Launcher</title>
+  <meta name="description" content="Bins is a native Windows 11 grouped taskbar icon launcher. Organize apps, Store apps, Smart Live Folders, snippets, and utilities into crisp Fluent mosaic Bins." />
+  <meta name="keywords" content="Windows 11 taskbar groups, taskbar folders Windows 11, Windows 11 launcher, taskbar organizer, grouped taskbar icons, Fluent launcher, WPF Windows 11 launcher, Bins for Windows 11, Smart Live Folders, Windows 11 productivity" />
+  <meta name="author" content="Piyush Agade" />
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
+  <meta name="theme-color" content="#090B0F" />
+  <link rel="canonical" href="https://app.piyushagade.xyz/bins/" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Bins for Windows 11" />
+  <meta property="og:url" content="https://app.piyushagade.xyz/bins/" />
+  <meta property="og:title" content="Bins — Taskbar Groups for Windows 11" />
+  <meta property="og:description" content="Organize apps, Smart Live Folders, snippets, and system utilities into native mosaic Bins right on your Windows 11 taskbar. Pure C#, WPF &amp; Fluent UI." />
+  <meta property="og:image" content="https://app.piyushagade.xyz/bins/assets/og-card.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Bins for Windows 11 — Native grouped taskbar launcher" />
+
+  <!-- Twitter / X Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Bins — Taskbar Groups for Windows 11" />
+  <meta name="twitter:description" content="Group your Windows 11 taskbar apps, Smart Live Folders, snippets, and utilities into crisp native mosaic Bins." />
+  <meta name="twitter:image" content="https://app.piyushagade.xyz/bins/assets/og-card.png" />
+
+  <!-- Structured Data (JSON-LD) -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Bins for Windows 11",
+    "alternateName": "Bins",
+    "description": "A native Windows 11 grouped taskbar icon launcher with multi-style mosaic icons, Smart Live Folders, global Omni-Search, profiles, and Fluent Acrylic & Mica flyouts.",
+    "url": "https://app.piyushagade.xyz/bins/",
+    "downloadUrl": "https://app.piyushagade.xyz/bins/downloads/Bins-Setup-1.5.6-x64.exe",
+    "image": "https://app.piyushagade.xyz/bins/assets/og-card.png",
+    "softwareVersion": "1.5.6",
+    "operatingSystem": "Windows 11",
+    "processorRequirements": "x64",
+    "fileSize": "2.2MB",
+    "applicationCategory": "UtilitiesApplication",
+    "author": {
+      "@type": "Person",
+      "name": "Piyush Agade"
+    },
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "featureList": [
+      "Multi-style mosaic taskbar icons (2x2 Grid, 3x3 Mini-Grid, Fanned Stack, Emoji/Monogram Badge)",
+      "Smart Live Folders, Windows Recent Files, and Nested Sub-Bins",
+      "Global Cross-Bin Omni-Search (Ctrl+Alt+Space)",
+      "Running-app taskbar indicators, hover peek strip, and live unread badges",
+      "One-click Bin Profiles, Quick Text Snippets, and built-in System Utility tiles",
+      "Native C# & WPF with Fluent styling and DWM Acrylic and Mica backdrop materials"
+    ]
+  }
+  </script>
+
+  <link rel="icon" href="app.ico" type="image/x-icon" />
+  <link rel="apple-touch-icon" href="assets/app-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="ambient" aria-hidden="true">
+    <div class="glow glow-top"></div>
+    <div class="glow glow-side"></div>
+  </div>
+
+  <!-- Minimal Header -->
+  <header class="site-header" id="top">
+    <div class="container nav-inner">
+      <a href="#top" class="brand" aria-label="Bins Home">
+        <img src="assets/app-icon.png" alt="Bins" class="brand-icon" width="24" height="24" />
+        <span class="brand-name">Bins</span>
+      </a>
+
+      <nav class="nav-links" aria-label="Primary">
+        <a href="#features">Features</a>
+        <a href="#download">Download</a>
+      </nav>
+
+      <div class="nav-actions">
+        <button type="button" class="icon-btn" id="themeToggle" aria-label="Toggle theme" title="Toggle theme">
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+          </svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
+        <a href="downloads/Bins-Setup-1.5.6-x64.exe" download data-track-download="bins" class="btn btn-primary btn-sm">Download</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Hero -->
+    <section class="hero">
+      <div class="container hero-inner">
+        <h1 class="hero-title">
+          Taskbar groups for<br />
+          <span class="text-gradient">Windows 11.</span>
+        </h1>
+
+        <p class="hero-subtitle">
+          Organize apps, folders, snippets, and system tiles into native mosaic Bins right on your taskbar. Fast, lightweight, and pure Windows 11 Fluent UI.
+        </p>
+
+        <div class="hero-cta">
+          <a href="downloads/Bins-Setup-1.5.6-x64.exe" download data-track-download="bins" class="btn btn-primary btn-lg">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span>Download for Windows 11</span>
+          </a>
+        </div>
+
+        <p class="hero-meta">v1.5.6 &nbsp;·&nbsp; 2.1 MB &nbsp;·&nbsp; Windows 11 x64 &nbsp;·&nbsp; No admin required<span class="dl-meta" id="heroDlWrap" hidden> &nbsp;·&nbsp; <strong id="heroDlCount">0</strong> <span id="heroDlWord">downloads</span></span></p>
+
+        <!-- Interactive Windows 11 Desktop Preview -->
+        <div class="stage-wrap">
+          <div class="win11-stage" id="win11Stage" data-material="acrylic">
+            <div class="stage-wallpaper" aria-hidden="true">
+              <div class="bloom bloom-a"></div>
+              <div class="bloom bloom-b"></div>
+            </div>
+
+            <!-- Subtle floating controls inside the desktop frame -->
+            <div class="stage-hud" role="toolbar" aria-label="Preview controls">
+              <div class="segmented" data-control="material">
+                <button type="button" class="seg-btn active" data-value="acrylic">Acrylic</button>
+                <button type="button" class="seg-btn" data-value="mica">Mica</button>
+                <button type="button" class="seg-btn" data-value="solid">Solid</button>
+              </div>
+              <button type="button" class="hud-btn" id="omniTrigger" title="Try Omni-Search (Ctrl+Alt+Space)">
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                  <circle cx="9" cy="9" r="5.5"></circle>
+                  <path d="M13.2 13.2L16.5 16.5" stroke-linecap="round"></path>
+                </svg>
+                <span>Search</span>
+              </button>
+            </div>
+
+            <!-- Toast inside stage -->
+            <div class="stage-toast" id="stageToast" role="status" aria-live="polite"></div>
+
+            <!-- Omni-Search Overlay -->
+            <div class="omni-overlay" id="omniOverlay" aria-hidden="true">
+              <div class="omni-modal">
+                <div class="omni-input-row">
+                  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                    <circle cx="9" cy="9" r="6"></circle>
+                    <path d="M13.5 13.5L17 17" stroke-linecap="round"></path>
+                  </svg>
+                  <input type="text" id="omniInput" placeholder="Search across all Bins..." autocomplete="off" />
+                  <button type="button" class="omni-esc" id="omniClose">Esc</button>
+                </div>
+                <div class="omni-results" id="omniResults"></div>
+              </div>
+            </div>
+
+            <!-- Active Bin Flyout -->
+            <div class="bin-flyout" id="binFlyout" role="dialog" aria-label="Bin Flyout">
+              <div class="flyout-header">
+                <div class="flyout-title-wrap">
+                  <button type="button" class="flyout-back" id="flyoutBack" aria-label="Back" hidden>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M10 3.5L5.5 8 10 12.5" />
+                    </svg>
+                  </button>
+                  <span class="flyout-accent-dot" id="flyoutDot"></span>
+                  <span class="flyout-title" id="flyoutTitle">Dev</span>
+                  <span class="flyout-badge" id="flyoutBadge">3 running</span>
+                </div>
+                <button type="button" class="flyout-mini-btn" id="flyoutLaunchAll" title="Open workspace">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="5 3.5 12.5 8 5 12.5 5 3.5"></polygon>
+                  </svg>
+                </button>
+              </div>
+
+              <div class="flyout-tabs" id="flyoutTabs" role="tablist"></div>
+              <div class="flyout-grid" id="flyoutGrid"></div>
+            </div>
+
+            <!-- Windows 11 Taskbar -->
+            <div class="win11-taskbar" role="toolbar" aria-label="Taskbar Preview">
+              <div class="taskbar-center">
+                <button type="button" class="tb-item tb-static" aria-label="Start">
+                  <span class="win-logo" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+                </button>
+
+                <button type="button" class="tb-item tb-bin active" data-bin="dev" title="Dev Bin">
+                  <span class="bin-icon mosaic-2x2 tint-cyan">
+                    <i style="--c:#38BDF8"></i><i style="--c:#818CF8"></i>
+                    <i style="--c:#34D399"></i><i style="--c:#F59E0B"></i>
+                  </span>
+                  <span class="tb-indicators">
+                    <span class="tb-pill"></span>
+                    <span class="tb-dot"></span>
+                  </span>
+                </button>
+
+                <button type="button" class="tb-item tb-bin" data-bin="work" title="Work Bin">
+                  <span class="bin-icon mosaic-3x3 tint-blue">
+                    <i style="--c:#60A5FA"></i><i style="--c:#A78BFA"></i><i style="--c:#F472B6"></i>
+                    <i style="--c:#34D399"></i><i style="--c:#FBBF24"></i><i style="--c:#38BDF8"></i>
+                    <i style="--c:#FB7185"></i><i style="--c:#93C5FD"></i><i style="--c:#C084FC"></i>
+                  </span>
+                  <span class="tb-unread-dot" aria-label="Unread notifications"></span>
+                  <span class="tb-indicators">
+                    <span class="tb-dot"></span>
+                    <span class="tb-dot"></span>
+                  </span>
+                </button>
+
+                <button type="button" class="tb-item tb-bin" data-bin="folders" title="Folders Bin">
+                  <span class="bin-icon mosaic-stack tint-amber">
+                    <i class="card-back"></i><i class="card-mid"></i><i class="card-front"></i>
+                  </span>
+                  <span class="tb-indicators"><span class="tb-dot"></span></span>
+                </button>
+
+                <button type="button" class="tb-item tb-bin" data-bin="utilities" title="Utilities Bin">
+                  <span class="bin-icon mosaic-badge tint-purple">UT</span>
+                </button>
+              </div>
+              <span class="tray-time" id="trayTime">9:15 PM</span>
+            </div>
+          </div>
+
+          <p class="stage-caption">Interactive preview — click the taskbar Bins, open nested sub-bins, or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd>.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Sleek Minimal Features Grid -->
+    <section class="section" id="features">
+      <div class="container">
+        <div class="section-head reveal">
+          <h2>Designed to feel built-in.</h2>
+          <p>Everything you need to tame a busy Windows 11 taskbar—nothing you don't.</p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature-card reveal">
+            <div class="feature-top">
+              <div class="mini-mosaics" aria-hidden="true">
+                <span class="mini-sq mosaic-2x2"><i style="--c:#38BDF8"></i><i style="--c:#818CF8"></i><i style="--c:#34D399"></i><i style="--c:#F59E0B"></i></span>
+                <span class="mini-sq mosaic-stack"><i class="card-back"></i><i class="card-mid"></i><i class="card-front"></i></span>
+                <span class="mini-sq mosaic-badge">DEV</span>
+              </div>
+              <div class="tint-dots" role="radiogroup" aria-label="Accent tints">
+                <button type="button" class="swatch active" data-tint="#60CDFF" style="--sw:#60CDFF" aria-label="Cyan"></button>
+                <button type="button" class="swatch" data-tint="#3B82F6" style="--sw:#3B82F6" aria-label="Blue"></button>
+                <button type="button" class="swatch" data-tint="#10B981" style="--sw:#10B981" aria-label="Emerald"></button>
+                <button type="button" class="swatch" data-tint="#F59E0B" style="--sw:#F59E0B" aria-label="Amber"></button>
+                <button type="button" class="swatch" data-tint="#F43F5E" style="--sw:#F43F5E" aria-label="Rose"></button>
+                <button type="button" class="swatch" data-tint="#A855F7" style="--sw:#A855F7" aria-label="Purple"></button>
+              </div>
+            </div>
+            <h3>Mosaic Icons &amp; Tints</h3>
+            <p>2×2 grids, 3×3 mini-grids, fanned stacks, or monogram badges with frosted backplates and accent tints.</p>
+          </article>
+
+          <article class="feature-card reveal">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+            </div>
+            <h3>Smart Live Folders &amp; Sub-Bins</h3>
+            <p>Mirror Downloads, Desktop, or Windows Recent with extension filters, or nest Bins inside Bins with inline breadcrumbs.</p>
+          </article>
+
+          <article class="feature-card reveal">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="7"></circle>
+                <path d="M21 21l-4.35-4.35"></path>
+              </svg>
+            </div>
+            <h3>Global Omni-Search</h3>
+            <p>Hit <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> from anywhere to launch apps, Store apps, snippets, and live files in milliseconds.</p>
+          </article>
+
+          <article class="feature-card reveal">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="14" rx="2"></rect>
+                <path d="M8 21h8"></path>
+              </svg>
+            </div>
+            <h3>Live Badges &amp; Window Switcher</h3>
+            <p>Native taskbar dots, hover peek strip, automatic unread counts, and optional keep-apps-inside-Bin mode.</p>
+          </article>
+
+          <article class="feature-card reveal">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                <polyline points="2 17 12 22 22 17"></polyline>
+                <polyline points="2 12 12 17 22 12"></polyline>
+              </svg>
+            </div>
+            <h3>Profiles, Snippets &amp; Utilities</h3>
+            <p>Switch Work, Dev, and Gaming layouts in one click. Drop in Recycle Bin, Audio Switcher, Snip, and 1-click clipboard tiles.</p>
+          </article>
+
+          <article class="feature-card reveal">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+              </svg>
+            </div>
+            <h3>Native C# &amp; Fluent UI</h3>
+            <p>Built with C#, WPF, and Win32 / DWM COM interop. Real Acrylic &amp; Mica materials, zero Electron overhead, and automatic backups.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Minimal Centered Download Finale -->
+    <section class="section download-section" id="download">
+      <div class="container">
+        <div class="download-box reveal">
+          <img src="assets/app-icon.png" alt="Bins" class="download-icon" width="52" height="52" />
+          <h2>Get Bins v1.5.6</h2>
+          <p>Per-user Windows 11 x64 installer. No admin privileges required.</p>
+
+          <div class="download-cta">
+            <a href="downloads/Bins-Setup-1.5.6-x64.exe" download data-track-download="bins" class="btn btn-primary btn-lg">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              <span>Download Setup (2.1 MB)</span>
+            </a>
+          </div>
+
+          <div class="download-sub">
+            <span class="dl-pill" id="boxDlWrap" hidden><span class="dl-dot"></span><strong id="boxDlCount">0</strong> <span id="boxDlWord">downloads</span></span>
+            <button type="button" class="copy-pill" id="copySilentBtn" title="Copy silent install command">
+              <code>Bins-Setup-1.5.6-x64.exe /SILENT</code>
+              <span id="copySilentLabel">Copy</span>
+            </button>
+            <a href="downloads/SHA256SUMS.txt" target="_blank" rel="noopener noreferrer" class="sha-link">SHA256 Checksum</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <span class="footer-left">Bins for Windows 11 &nbsp;·&nbsp; Piyush Agade</span>
+      <div class="footer-links">
+        <a href="downloads/Bins-Setup-1.5.6-x64.exe" download data-track-download="bins">v1.5.6</a>
+        <a href="downloads/SHA256SUMS.txt" target="_blank" rel="noopener noreferrer">SHA256</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
