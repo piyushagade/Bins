@@ -3,10 +3,10 @@
 
 #define MyAppName "Bins for Windows 11"
 #ifndef MyAppVersion
-  #define MyAppVersion "1.5.2"
+  #define MyAppVersion "1.5.3"
 #endif
 #define MyAppPublisher "Piyush Agade"
-#define MyAppURL "https://github.com/piyushagade/Bins"
+#define MyAppURL "https://app.piyushagade.xyz/bins"
 #define MyAppExeName "Bins.exe"
 
 [Setup]

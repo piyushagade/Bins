@@ -23,6 +23,7 @@ namespace WinBins.Services
 
     public static class BackupSyncService
     {
+        public const string WebsiteUrl = "https://app.piyushagade.xyz/bins";
         public const string GitHubRepoUrl = "https://github.com/piyushagade/Bins";
         private const string LatestReleaseApiUrl = "https://api.github.com/repos/piyushagade/Bins/releases/latest";
         private const string TagsApiUrl = "https://api.github.com/repos/piyushagade/Bins/tags";

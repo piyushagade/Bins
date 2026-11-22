@@ -2562,7 +2562,7 @@ namespace WinBins.Views
             };
             var detailsStack = new StackPanel();
             detailsStack.Children.Add(CreateAboutDetailRow("Author", "Piyush Agade", showTopDivider: false));
-            detailsStack.Children.Add(CreateAboutGitHubRow());
+            detailsStack.Children.Add(CreateAboutWebsiteRow());
             detailsStack.Children.Add(CreateAboutDetailRow("Architecture", "Windows 11 x64  •  WPF & Win32 Shell / DWM Interop", showTopDivider: true));
             detailsStack.Children.Add(CreateAboutDataFolderRow());
             detailsCard.Child = detailsStack;
@@ -2572,7 +2572,7 @@ namespace WinBins.Views
             return scroll;
         }
 
-        private UIElement CreateAboutGitHubRow()
+        private UIElement CreateAboutWebsiteRow()
         {
             var wrapper = new StackPanel();
             wrapper.Children.Add(new Border
@@ -2588,7 +2588,7 @@ namespace WinBins.Views
 
             var lbl = new TextBlock
             {
-                Text = "GitHub Repository",
+                Text = "Website",
                 FontSize = 13,
                 Foreground = FluentTheme.TextMuted,
                 VerticalAlignment = VerticalAlignment.Center
@@ -2598,7 +2598,7 @@ namespace WinBins.Views
 
             var urlText = new TextBlock
             {
-                Text = BackupSyncService.GitHubRepoUrl,
+                Text = BackupSyncService.WebsiteUrl,
                 FontSize = 12.5,
                 Foreground = FluentTheme.AccentBrush,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -2606,14 +2606,14 @@ namespace WinBins.Views
                 Margin = new Thickness(0, 0, 12, 0),
                 Cursor = Cursors.Hand
             };
-            urlText.MouseLeftButtonUp += (_, __) => OpenExternalUrl(BackupSyncService.GitHubRepoUrl);
+            urlText.MouseLeftButtonUp += (_, __) => OpenExternalUrl(BackupSyncService.WebsiteUrl);
             Grid.SetColumn(urlText, 1);
             grid.Children.Add(urlText);
 
-            var openRepoBtn = FluentTheme.CreateButton("Open GitHub", padding: new Thickness(10, 5, 11, 5), iconGlyph: "\uE8A7");
-            openRepoBtn.Click += (_, __) => OpenExternalUrl(BackupSyncService.GitHubRepoUrl);
-            Grid.SetColumn(openRepoBtn, 2);
-            grid.Children.Add(openRepoBtn);
+            var openSiteBtn = FluentTheme.CreateButton("Open website", padding: new Thickness(10, 5, 11, 5), iconGlyph: "\uE8A7");
+            openSiteBtn.Click += (_, __) => OpenExternalUrl(BackupSyncService.WebsiteUrl);
+            Grid.SetColumn(openSiteBtn, 2);
+            grid.Children.Add(openSiteBtn);
 
             wrapper.Children.Add(grid);
             return wrapper;
