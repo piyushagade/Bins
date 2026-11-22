@@ -166,6 +166,9 @@ namespace WinBins.Models
         [DataMember(Order = 18)]
         public bool ShowLiveWindowThumbnails { get; set; } = true;
 
+        [DataMember(Order = 19)]
+        public bool SendDiagnosticsAndUsage { get; set; } = true;
+
         public AppConfig()
         {
             SetFieldDefaults();
@@ -197,6 +200,7 @@ namespace WinBins.Models
             Profiles = new List<BinProfile>();
             ActiveProfileId = string.Empty;
             ShowLiveWindowThumbnails = true;
+            SendDiagnosticsAndUsage = true;
         }
 
         public void EnsureDefaults()
@@ -338,6 +342,9 @@ namespace WinBins.Models
         [DataMember(Order = 31)]
         public bool ShowNotificationBadges { get; set; }
 
+        [DataMember(Order = 32)]
+        public bool ShowFlyoutLaunchAllButton { get; set; }
+
         public BinGroup()
         {
             SetFieldDefaults();
@@ -382,6 +389,7 @@ namespace WinBins.Models
             LiveFolderFilter = string.Empty;
             LiveFolderRecentMode = false;
             ShowNotificationBadges = true;
+            ShowFlyoutLaunchAllButton = false;
         }
 
         public void EnsureDefaults()

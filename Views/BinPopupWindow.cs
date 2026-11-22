@@ -37,8 +37,10 @@ namespace WinBins.Views
         private readonly StackPanel _titleGroup;
         private readonly Image _flyoutHeaderIcon;
         private readonly TextBlock _headerTitle;
+        private readonly Button _launchAllBtn;
         private readonly Button _addBtn;
         private readonly Button _editBtn;
+        private readonly Button _closeBtn;
 
         private readonly Border _filterBar;
         private readonly TextBlock _filterTextBlock;
@@ -56,6 +58,11 @@ namespace WinBins.Views
         private readonly DispatcherTimer _hoverDismissTimer;
         private bool _openedByHover;
         private int _hoverOutsideStartTick;
+
+        private readonly DispatcherTimer _topmostReassertTimer;
+        private int _topmostReassertTicksRemaining;
+        private bool _isPinnedOpen;
+        private bool _launchedWhileOpen;
 
         private readonly Stack<BinGroup> _subBinStack = new Stack<BinGroup>();
         private Button _backBtn;
@@ -88,6 +95,12 @@ namespace WinBins.Views
         }
 
         public string CurrentBinId => _currentBin?.Id;
+
+        private bool IsKeepOpenMode =>
+            _isPinnedOpen || !(_configService.Current?.ClosePopupOnLaunch ?? true);
+
+        private bool ShouldStayOpenOnDeactivate =>
+            _isPinnedOpen || _launchedWhileOpen;
 
         public BinPopupWindow(
             ConfigService configService,
@@ -156,6 +169,25 @@ namespace WinBins.Views
             };
             _hoverDismissTimer.Tick += HoverDismissTimer_Tick;
 
+            _topmostReassertTimer = new DispatcherTimer(DispatcherPriority.Normal)
+            {
+                Interval = TimeSpan.FromMilliseconds(250)
+            };
+            _topmostReassertTimer.Tick += (_, __) =>
+            {
+                if (!IsVisible || !ShouldStayOpenOnDeactivate)
+                {
+                    _topmostReassertTimer.Stop();
+                    return;
+                }
+
+                ReassertTopmost();
+                if (--_topmostReassertTicksRemaining <= 0)
+                {
+                    _topmostReassertTimer.Stop();
+                }
+            };
+
             _slideTransform = new TranslateTransform(0, 0);
             _animRoot = new Grid
             {
@@ -189,7 +221,33 @@ namespace WinBins.Views
                 VerticalAlignment = VerticalAlignment.Center
             };
 
+            _launchAllBtn = FluentTheme.CreateIconButton("\uE768", "Launch all", size: 28, iconSize: 11.5);
+            _launchAllBtn.Visibility = Visibility.Collapsed;
+            _launchAllBtn.Click += (_, __) =>
+            {
+                BinGroup target = _currentBin;
+                if (target == null)
+                    return;
+
+                bool keepOpen = IsKeepOpenMode;
+                if (keepOpen)
+                {
+                    EnterKeepOpenAfterLaunch();
+                }
+                else
+                {
+                    HidePopup();
+                }
+
+                _ = LauncherService.LaunchBinWorkspaceAsync(target, _runningAppsManager);
+                if (keepOpen)
+                {
+                    EnsureOnTopAfterLaunch();
+                }
+            };
+
             _addBtn = FluentTheme.CreateIconButton("\uE710", "Add item", size: 28, iconSize: 12);
+            _addBtn.Margin = new Thickness(2, 0, 0, 0);
             _addBtn.Click += AddButton_Click;
 
             _editBtn = FluentTheme.CreateIconButton("\uE713", "Customize Bin", size: 28, iconSize: 12.5);
@@ -201,8 +259,15 @@ namespace WinBins.Views
                 _onCustomizeRequested?.Invoke(target);
             };
 
+            _closeBtn = FluentTheme.CreateIconButton("\uE711", "Close Bin (Esc)", size: 28, iconSize: 11);
+            _closeBtn.Margin = new Thickness(2, 0, 0, 0);
+            _closeBtn.Visibility = Visibility.Collapsed;
+            _closeBtn.Click += (_, __) => HidePopup();
+
+            actionButtons.Children.Add(_launchAllBtn);
             actionButtons.Children.Add(_addBtn);
             actionButtons.Children.Add(_editBtn);
+            actionButtons.Children.Add(_closeBtn);
             DockPanel.SetDock(actionButtons, Dock.Right);
             _headerDock.Children.Add(actionButtons);
 
@@ -476,6 +541,9 @@ namespace WinBins.Views
             _selectedTileIndex = -1;
             _openedByHover = openedByHover;
             _hoverOutsideStartTick = 0;
+            _isPinnedOpen = false;
+            _launchedWhileOpen = false;
+            _topmostReassertTimer.Stop();
 
             RebuildContent();
 
@@ -515,7 +583,7 @@ namespace WinBins.Views
 
         private void HoverDismissTimer_Tick(object sender, EventArgs e)
         {
-            if (!IsVisible || !_openedByHover || _currentBin == null)
+            if (!IsVisible || !_openedByHover || _currentBin == null || ShouldStayOpenOnDeactivate)
             {
                 _hoverDismissTimer.Stop();
                 return;
@@ -608,7 +676,10 @@ namespace WinBins.Views
         public void HidePopup()
         {
             _hoverDismissTimer.Stop();
+            _topmostReassertTimer.Stop();
             _openedByHover = false;
+            _isPinnedOpen = false;
+            _launchedWhileOpen = false;
             ShowDropHint(null, highlightOuterBorder: false);
             if (IsVisible)
             {
@@ -687,6 +758,96 @@ namespace WinBins.Views
             }
         }
 
+        private static int CountLaunchAllItems(BinGroup bin)
+        {
+            if (bin == null)
+                return 0;
+
+            int count = (bin.Items ?? new List<BinItem>())
+                .Count(it => it != null && it.IncludeInOpenAll && !BinItem.IsSystemCommand(it.TargetPath));
+            if (count == 0 && !string.IsNullOrWhiteSpace(bin.LiveFolderPath))
+            {
+                string folder = Environment.ExpandEnvironmentVariables(bin.LiveFolderPath.Trim());
+                if (Directory.Exists(folder))
+                    return 1;
+            }
+            return count;
+        }
+
+        private bool UpdateHeaderVisibility(bool repositionIfHeaderToggled = false)
+        {
+            if (_currentBin == null)
+                return false;
+
+            Visibility prevHeaderVis = _headerDock.Visibility;
+
+            bool showTitle = _currentBin.ShowFlyoutTitle;
+            int launchAllCount = CountLaunchAllItems(_currentBin);
+            bool showLaunchAll = _currentBin.ShowFlyoutLaunchAllButton && launchAllCount > 0;
+            bool showAdd = _currentBin.ShowFlyoutAddButton;
+            bool showEdit = _currentBin.ShowFlyoutEditButton;
+            bool showClose = ShouldStayOpenOnDeactivate;
+            bool anyHeader = showTitle || showLaunchAll || showAdd || showEdit || showClose;
+
+            _headerDock.Visibility = anyHeader ? Visibility.Visible : Visibility.Collapsed;
+            _titleGroup.Visibility = showTitle ? Visibility.Visible : Visibility.Collapsed;
+            _launchAllBtn.Visibility = showLaunchAll ? Visibility.Visible : Visibility.Collapsed;
+            if (showLaunchAll)
+            {
+                _launchAllBtn.ToolTip = $"Launch all ({launchAllCount} {(launchAllCount == 1 ? "item" : "items")})";
+            }
+            _addBtn.Visibility = showAdd ? Visibility.Visible : Visibility.Collapsed;
+            _editBtn.Visibility = showEdit ? Visibility.Visible : Visibility.Collapsed;
+            _closeBtn.Visibility = showClose ? Visibility.Visible : Visibility.Collapsed;
+
+            if (repositionIfHeaderToggled && prevHeaderVis != _headerDock.Visibility && IsVisible)
+            {
+                UpdateLayout();
+                PositionAboveTaskbarAnchor(_lastAnchorScreenPx);
+            }
+
+            return anyHeader;
+        }
+
+        private void EnterKeepOpenAfterLaunch()
+        {
+            _launchedWhileOpen = true;
+            _openedByHover = false;
+            _hoverDismissTimer.Stop();
+            UpdateHeaderVisibility(repositionIfHeaderToggled: true);
+        }
+
+        private void EnsureOnTopAfterLaunch()
+        {
+            if (!IsVisible)
+                return;
+
+            ReassertTopmost();
+            _topmostReassertTicksRemaining = 6;
+            _topmostReassertTimer.Stop();
+            _topmostReassertTimer.Start();
+        }
+
+        private void ReassertTopmost()
+        {
+            if (!IsVisible)
+                return;
+
+            Topmost = true;
+            IntPtr hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd != IntPtr.Zero)
+            {
+                Win32Interop.SetWindowPos(
+                    hwnd,
+                    Win32Interop.HWND_TOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    Win32Interop.SWP_NOMOVE | Win32Interop.SWP_NOSIZE | Win32Interop.SWP_NOACTIVATE);
+            }
+        }
+
         private void RebuildContent()
         {
             if (_currentBin == null)
@@ -695,14 +856,7 @@ namespace WinBins.Views
             Brush binAccent = FluentTheme.GetEffectiveAccentBrush(_currentBin.AccentColorHex);
 
             bool showTitle = _currentBin.ShowFlyoutTitle;
-            bool showAdd = _currentBin.ShowFlyoutAddButton;
-            bool showEdit = _currentBin.ShowFlyoutEditButton;
-            bool anyHeader = showTitle || showAdd || showEdit;
-
-            _headerDock.Visibility = anyHeader ? Visibility.Visible : Visibility.Collapsed;
-            _titleGroup.Visibility = showTitle ? Visibility.Visible : Visibility.Collapsed;
-            _addBtn.Visibility = showAdd ? Visibility.Visible : Visibility.Collapsed;
-            _editBtn.Visibility = showEdit ? Visibility.Visible : Visibility.Collapsed;
+            bool anyHeader = UpdateHeaderVisibility(repositionIfHeaderToggled: false);
 
             if (showTitle && !string.IsNullOrWhiteSpace(_currentBin.FlyoutIconPath))
             {
@@ -1488,11 +1642,20 @@ namespace WinBins.Views
             {
                 if (e.ChangedButton == MouseButton.Middle)
                 {
-                    if (_configService.Current?.ClosePopupOnLaunch ?? true)
+                    bool keepOpen = IsKeepOpenMode;
+                    if (keepOpen)
+                    {
+                        EnterKeepOpenAfterLaunch();
+                    }
+                    else
                     {
                         HidePopup();
                     }
                     LauncherService.LaunchItem(item);
+                    if (keepOpen)
+                    {
+                        EnsureOnTopAfterLaunch();
+                    }
                     e.Handled = true;
                 }
             };
@@ -1635,11 +1798,20 @@ namespace WinBins.Views
 
                     if (!isWebUrl && !isSystemCmd && !allShortcutsOrExes)
                     {
-                        if (_configService.Current?.ClosePopupOnLaunch ?? true)
+                        bool keepOpen = IsKeepOpenMode;
+                        if (keepOpen)
+                        {
+                            EnterKeepOpenAfterLaunch();
+                        }
+                        else
                         {
                             HidePopup();
                         }
                         LauncherService.LaunchItemWithFiles(item, droppedFiles);
+                        if (keepOpen)
+                        {
+                            EnsureOnTopAfterLaunch();
+                        }
                         e.Handled = true;
                         return;
                     }
@@ -1657,7 +1829,7 @@ namespace WinBins.Views
             bool ctrlHeld = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
             bool shiftHeld = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
             bool forceNewInstance = shiftHeld || ctrlHeld;
-            bool keepOpen = !(_configService.Current?.ClosePopupOnLaunch ?? true);
+            bool keepOpen = IsKeepOpenMode;
 
             if (item.Kind == BinItemKind.SubBin || BinItem.IsSubBin(item.TargetPath))
             {
@@ -1702,7 +1874,11 @@ namespace WinBins.Views
                 ? (_runningAppsManager?.GetRunningWindowsForItem(item) ?? new List<RunningWindowEntry>())
                 : null;
 
-            if (!keepOpen)
+            if (keepOpen)
+            {
+                EnterKeepOpenAfterLaunch();
+            }
+            else
             {
                 HidePopup();
             }
@@ -1713,6 +1889,10 @@ namespace WinBins.Views
                 {
                     Win32Interop.MinimizeWindow(liveWindows[0].Hwnd);
                     _priorForegroundHwnd = IntPtr.Zero;
+                    if (keepOpen)
+                    {
+                        EnsureOnTopAfterLaunch();
+                    }
                     return;
                 }
 
@@ -1732,6 +1912,11 @@ namespace WinBins.Views
             else
             {
                 LauncherService.LaunchItem(item);
+            }
+
+            if (keepOpen)
+            {
+                EnsureOnTopAfterLaunch();
             }
         }
 
@@ -1819,6 +2004,10 @@ namespace WinBins.Views
                     if (clickedInsidePopup)
                     {
                         Activate();
+                    }
+                    else if (ShouldStayOpenOnDeactivate)
+                    {
+                        ReassertTopmost();
                     }
                     else
                     {
@@ -2063,18 +2252,45 @@ namespace WinBins.Views
             menu.PlacementTarget = anchor;
             menu.Placement = PlacementMode.MousePoint;
 
-            int wsCount = (_currentBin.Items ?? new List<BinItem>())
-                .Count(it => it != null && it.IncludeInOpenAll && !BinItem.IsSystemCommand(it.TargetPath));
+            int wsCount = CountLaunchAllItems(_currentBin);
             if (wsCount > 0)
             {
-                menu.Items.Add(FluentTheme.CreateMenuItem($"Open workspace ({wsCount} items)", () =>
+                menu.Items.Add(FluentTheme.CreateMenuItem($"Launch all ({wsCount} {(wsCount == 1 ? "item" : "items")})", () =>
                 {
                     BinGroup target = _currentBin;
-                    HidePopup();
+                    bool keepOpen = IsKeepOpenMode;
+                    if (keepOpen)
+                    {
+                        EnterKeepOpenAfterLaunch();
+                    }
+                    else
+                    {
+                        HidePopup();
+                    }
                     _ = LauncherService.LaunchBinWorkspaceAsync(target, _runningAppsManager);
-                }, iconGlyph: "\uE8A7"));
+                    if (keepOpen)
+                    {
+                        EnsureOnTopAfterLaunch();
+                    }
+                }, iconGlyph: "\uE768"));
                 menu.Items.Add(FluentTheme.CreateMenuSeparator());
             }
+
+            menu.Items.Add(FluentTheme.CreateMenuItem(
+                _isPinnedOpen ? "Unpin Bin" : "Pin Bin open on top",
+                () =>
+                {
+                    _isPinnedOpen = !_isPinnedOpen;
+                    if (_isPinnedOpen)
+                    {
+                        _openedByHover = false;
+                        _hoverDismissTimer.Stop();
+                        ReassertTopmost();
+                    }
+                    UpdateHeaderVisibility(repositionIfHeaderToggled: true);
+                },
+                iconGlyph: _isPinnedOpen ? "\uE77A" : "\uE718"));
+            menu.Items.Add(FluentTheme.CreateMenuSeparator());
 
             menu.Items.Add(FluentTheme.CreateMenuItem("Add Installed / Store App...", AddFromStartMenu, iconGlyph: "\uE737"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Add App or Shortcut...", AddFilesViaDialog, iconGlyph: "\uE7C3"));
@@ -2907,7 +3123,7 @@ namespace WinBins.Views
 
         private void BinPopupWindow_Deactivated(object sender, EventArgs e)
         {
-            if (_suppressDeactivateClose || _activeContextMenuCount > 0)
+            if (_suppressDeactivateClose || _activeContextMenuCount > 0 || ShouldStayOpenOnDeactivate)
                 return;
 
             if (IsVisible)

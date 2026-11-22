@@ -272,28 +272,39 @@ namespace WinBins.Services
             {
                 ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
 
-                string json = DownloadGitHubJson(LatestReleaseApiUrl);
+                bool reachedGitHub = false;
+                string json = DownloadGitHubJson(LatestReleaseApiUrl, out string latestErr);
                 string tagName = null;
                 string htmlUrl = null;
 
-                if (!string.IsNullOrWhiteSpace(json))
+                if (json != null)
                 {
+                    reachedGitHub = true;
                     tagName = ExtractJsonStringField(json, "tag_name");
                     htmlUrl = ExtractJsonStringField(json, "html_url");
                 }
 
                 // Fall back to /tags if repository uses git tags without formal GitHub Releases
+                string tagsErr = null;
                 if (string.IsNullOrWhiteSpace(tagName))
                 {
-                    string tagsJson = DownloadGitHubJson(TagsApiUrl);
-                    if (!string.IsNullOrWhiteSpace(tagsJson))
+                    string tagsJson = DownloadGitHubJson(TagsApiUrl, out tagsErr);
+                    if (tagsJson != null)
                     {
+                        reachedGitHub = true;
                         tagName = ExtractJsonStringField(tagsJson, "name");
                         if (!string.IsNullOrWhiteSpace(tagName))
                         {
                             htmlUrl = GitHubRepoUrl + "/releases/tag/" + tagName;
                         }
                     }
+                }
+
+                if (!reachedGitHub)
+                {
+                    result.Success = false;
+                    result.ErrorMessage = !string.IsNullOrWhiteSpace(latestErr) ? latestErr : (tagsErr ?? "Unable to reach GitHub.");
+                    return result;
                 }
 
                 if (string.IsNullOrWhiteSpace(tagName))
@@ -330,8 +341,9 @@ namespace WinBins.Services
             }
         }
 
-        private static string DownloadGitHubJson(string url)
+        private static string DownloadGitHubJson(string url, out string errorMessage)
         {
+            errorMessage = null;
             try
             {
                 var req = (HttpWebRequest)WebRequest.Create(url);
@@ -352,8 +364,9 @@ namespace WinBins.Services
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                errorMessage = ex.Message;
                 return null;
             }
         }

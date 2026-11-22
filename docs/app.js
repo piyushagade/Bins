@@ -77,7 +77,7 @@
       badge: "Smart Live",
       tabs: {
         Downloads: [
-          { name: "Bins-1.5.6.exe", glyph: "EXE", color: "#0EA5E9" },
+          { name: "Bins-1.5.7.exe", glyph: "EXE", color: "#0EA5E9" },
           { name: "Invoice.pdf", glyph: "PDF", color: "#E11D48" },
           { name: "Assets.zip", glyph: "ZIP", color: "#D97706" },
           { name: "Mockup.png", glyph: "PNG", color: "#8B5CF6" },
@@ -389,7 +389,7 @@
 
   copySilentBtn?.addEventListener("click", () => {
     navigator.clipboard
-      ?.writeText(".\\Bins-Setup-1.5.6-x64.exe /SILENT /NORESTART")
+      ?.writeText(".\\Bins-Setup-1.5.7-x64.exe /SILENT /NORESTART")
       .then(() => {
         if (copySilentLabel) copySilentLabel.textContent = "Copied";
         setTimeout(() => {
@@ -436,12 +436,44 @@
   // Live Download Counter (app.piyushagade.xyz/counter)
   // --------------------------------------------------------------------------
   const COUNTER_BASE = "https://app.piyushagade.xyz/counter/bins/downloads";
+  const COUNTER_TIMEOUT_MS = 4000;
   const heroDlWrap = document.getElementById("heroDlWrap");
   const heroDlCount = document.getElementById("heroDlCount");
   const heroDlWord = document.getElementById("heroDlWord");
   const boxDlWrap = document.getElementById("boxDlWrap");
   const boxDlCount = document.getElementById("boxDlCount");
   const boxDlWord = document.getElementById("boxDlWord");
+
+  let counterApiUnavailable = false;
+
+  function fetchCounterJson(url, options = {}) {
+    if (counterApiUnavailable || typeof fetch !== "function") {
+      return Promise.resolve(null);
+    }
+
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = controller
+      ? setTimeout(() => controller.abort(), COUNTER_TIMEOUT_MS)
+      : null;
+
+    const fetchOpts = controller ? { ...options, signal: controller.signal } : options;
+
+    return fetch(url, fetchOpts)
+      .then((r) => {
+        if (!r || !r.ok) {
+          counterApiUnavailable = true;
+          return null;
+        }
+        return r.json().catch(() => null);
+      })
+      .catch(() => {
+        counterApiUnavailable = true;
+        return null;
+      })
+      .finally(() => {
+        if (timer) clearTimeout(timer);
+      });
+  }
 
   function renderDownloadCount(count) {
     if (typeof count !== "number" || !Number.isFinite(count) || count <= 0) return;
@@ -455,31 +487,26 @@
     if (boxDlWrap) boxDlWrap.hidden = false;
   }
 
-  fetch(COUNTER_BASE, { cache: "no-store" })
-    .then((r) => (r.ok ? r.json() : null))
-    .then((data) => {
-      if (data && typeof data.count === "number") {
-        renderDownloadCount(data.count);
-      }
-    })
-    .catch(() => {});
+  fetchCounterJson(COUNTER_BASE, { cache: "no-store" }).then((data) => {
+    if (data && typeof data.count === "number") {
+      renderDownloadCount(data.count);
+    }
+  });
 
   let dlIncrementInFlight = false;
   document.querySelectorAll("[data-track-download]").forEach((link) => {
     link.addEventListener("click", () => {
       const sessionKey = "bins-dl-counted-v2";
-      if (dlIncrementInFlight || sessionStorage.getItem(sessionKey)) return;
+      if (counterApiUnavailable || dlIncrementInFlight || sessionStorage.getItem(sessionKey)) return;
       dlIncrementInFlight = true;
 
-      fetch(`${COUNTER_BASE}/up`, { method: "POST", keepalive: true })
-        .then((r) => (r.ok ? r.json() : null))
+      fetchCounterJson(`${COUNTER_BASE}/up`, { method: "POST", keepalive: true })
         .then((data) => {
           if (data && typeof data.count === "number") {
             sessionStorage.setItem(sessionKey, "1");
             renderDownloadCount(data.count);
           }
         })
-        .catch(() => {})
         .finally(() => {
           dlIncrementInFlight = false;
         });

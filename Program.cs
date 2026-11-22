@@ -178,6 +178,10 @@ namespace WinBins
 
         private ConfigService _configService;
         private IconService _iconService;
+        private AnalyticsService _analyticsService;
+        private UpdateCheckService _updateCheckService;
+        private UpdateCheckResult _availableUpdate;
+        private string _pendingBalloonClickUrl;
         private TaskbarBinHostManager _taskbarManager;
         private RunningAppsTaskbarManager _runningAppsManager;
         private TaskbarIndicatorOverlayManager _indicatorOverlayManager;
@@ -203,6 +207,7 @@ namespace WinBins
             {
                 try
                 {
+                    _analyticsService?.TrackError();
                     string errPath = Path.Combine(
                         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                         "WinBins",
@@ -211,6 +216,11 @@ namespace WinBins
                     File.AppendAllText(errPath, $"[{DateTime.Now:O}] {e.Exception}\r\n");
                 }
                 catch { }
+            };
+
+            AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+            {
+                try { _analyticsService?.TrackError(); } catch { }
             };
         }
 
@@ -231,6 +241,14 @@ namespace WinBins
             }
 
             _iconService = new IconService(_configService);
+            _analyticsService = new AnalyticsService(_configService);
+            _analyticsService.Start();
+            LauncherService.WorkspaceLaunched += () => _analyticsService?.TrackFeature("launch-all");
+
+            _updateCheckService = new UpdateCheckService(_configService);
+            _updateCheckService.UpdateAvailable += OnUpdateAvailable;
+            _updateCheckService.Start();
+
             _taskbarManager = new TaskbarBinHostManager(_configService, _iconService, Dispatcher);
             _runningAppsManager = new RunningAppsTaskbarManager(_configService, Dispatcher);
             _indicatorOverlayManager = new TaskbarIndicatorOverlayManager(_configService, _taskbarManager, _runningAppsManager, Dispatcher);
@@ -255,6 +273,8 @@ namespace WinBins
             {
                 _peekWindow?.HidePeek();
                 _popupWindow.ToggleAtScreenPoint(bin, cursorPt);
+                if (_popupWindow.IsVisible)
+                    _analyticsService?.TrackFeature("flyout");
             };
 
             _taskbarManager.BinTaskbarHoverTriggered += (bin, anchorPt, isDragHover) =>
@@ -263,6 +283,7 @@ namespace WinBins
                 // When triggered by dragging a file over the taskbar icon, keep popup open until drop/dismiss;
                 // when triggered by normal cursor hover, enable auto-dismiss when cursor leaves safe zone.
                 _popupWindow.ShowForBin(bin, anchorPt, openedByHover: true);
+                _analyticsService?.TrackFeature("flyout");
             };
 
             _taskbarManager.BinTaskbarPeekTriggered += (bin, anchorPt) =>
@@ -285,6 +306,8 @@ namespace WinBins
                         anchorPt = new System.Drawing.Point(cursorPt.X, cursorPt.Y);
                     }
                     _popupWindow.ToggleAtScreenPoint(bin, anchorPt);
+                    if (_popupWindow.IsVisible)
+                        _analyticsService?.TrackFeature("flyout");
                 }));
             };
 
@@ -295,6 +318,8 @@ namespace WinBins
                     _peekWindow?.HidePeek();
                     _popupWindow?.HidePopup();
                     EnsureOmniSearchWindow().ToggleSearch();
+                    if (_omniSearchWindow != null && _omniSearchWindow.IsVisible)
+                        _analyticsService?.TrackFeature("omnisearch");
                 }));
             };
 
@@ -367,7 +392,12 @@ namespace WinBins
                     _popupWindow,
                     _runningAppsManager,
                     _hotkeyManager,
-                    onOpenSearch: () => EnsureOmniSearchWindow().ShowSearch());
+                    onOpenSearch: () =>
+                    {
+                        EnsureOmniSearchWindow().ShowSearch();
+                        _analyticsService?.TrackFeature("omnisearch");
+                    },
+                    updateCheckService: _updateCheckService);
 
                 win.IsVisibleChanged += (_, __) => _indicatorOverlayManager?.NotifyTaskbarLayoutShifted();
                 win.Closed += (_, __) =>
@@ -448,7 +478,54 @@ namespace WinBins
             };
 
             _trayIcon.DoubleClick += (_, __) => Dispatcher.BeginInvoke(new Action(() => ShowManager(null)));
+            _trayIcon.BalloonTipClicked += (_, __) =>
+            {
+                string url = _pendingBalloonClickUrl;
+                if (!string.IsNullOrWhiteSpace(url))
+                {
+                    _pendingBalloonClickUrl = null;
+                    try
+                    {
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = url,
+                            UseShellExecute = true
+                        });
+                    }
+                    catch { }
+                }
+            };
             RebuildTrayMenu();
+        }
+
+        private void OnUpdateAvailable(UpdateCheckResult result, bool shouldNotifyToast)
+        {
+            if (_isShuttingDown || result == null || !result.IsUpdateAvailable)
+                return;
+
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (_isShuttingDown)
+                    return;
+
+                _availableUpdate = result;
+                RebuildTrayMenu();
+                _mainWindow?.SetAvailableUpdate(result);
+
+                if (shouldNotifyToast && _trayIcon != null)
+                {
+                    try
+                    {
+                        _pendingBalloonClickUrl = result.ReleaseUrl;
+                        _trayIcon.ShowBalloonTip(
+                            6000,
+                            "Bins Update Available",
+                            $"Bins v{result.LatestVersion} is available (currently v{result.CurrentVersion}). Click to view the release.",
+                            System.Windows.Forms.ToolTipIcon.Info);
+                    }
+                    catch { }
+                }
+            }));
         }
 
         private void RebuildTrayMenu()
@@ -457,6 +534,29 @@ namespace WinBins
                 return;
 
             var menu = new System.Windows.Forms.ContextMenuStrip();
+
+            if (_availableUpdate != null && _availableUpdate.IsUpdateAvailable)
+            {
+                string releaseUrl = _availableUpdate.ReleaseUrl;
+                var updateItem = new System.Windows.Forms.ToolStripMenuItem($"Update available (v{_availableUpdate.LatestVersion})...");
+                updateItem.Click += (_, __) =>
+                {
+                    if (!string.IsNullOrWhiteSpace(releaseUrl))
+                    {
+                        try
+                        {
+                            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                            {
+                                FileName = releaseUrl,
+                                UseShellExecute = true
+                            });
+                        }
+                        catch { }
+                    }
+                };
+                menu.Items.Add(updateItem);
+                menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+            }
 
             var bins = _configService.Current?.Bins;
             if (bins != null && bins.Count > 0)
@@ -469,6 +569,7 @@ namespace WinBins
                     {
                         Win32Interop.GetCursorPos(out Win32Interop.POINT pt);
                         _popupWindow.ShowForBin(captured, new System.Drawing.Point(pt.X, pt.Y));
+                        _analyticsService?.TrackFeature("flyout");
                     }));
                     menu.Items.Add(binItem);
                 }
@@ -510,6 +611,7 @@ namespace WinBins
             {
                 _popupWindow?.HidePopup();
                 EnsureOmniSearchWindow().ShowSearch();
+                _analyticsService?.TrackFeature("omnisearch");
             }));
             menu.Items.Add(searchTrayItem);
 
@@ -596,6 +698,9 @@ namespace WinBins
                         _popupWindow.ShowForBin(bin, new System.Drawing.Point(x, y));
                     else
                         _popupWindow.ToggleAtScreenPoint(bin, new System.Drawing.Point(x, y));
+
+                    if (_popupWindow.IsVisible)
+                        _analyticsService?.TrackFeature("flyout");
                 }
                 else
                 {
@@ -631,6 +736,7 @@ namespace WinBins
             {
                 _popupWindow?.HidePopup();
                 EnsureOmniSearchWindow().ShowSearch();
+                _analyticsService?.TrackFeature("omnisearch");
                 return;
             }
 
@@ -736,6 +842,7 @@ namespace WinBins
         {
             if (_configService.ApplyProfile(profileIdOrAll))
             {
+                _analyticsService?.TrackFeature("profiles");
                 _popupWindow?.HidePopup();
                 _peekWindow?.HidePeek();
                 _taskbarManager?.SyncAllBins();
@@ -773,6 +880,8 @@ namespace WinBins
             _trayBoldFont = null;
             _trayDrawingIcon?.Dispose();
 
+            _updateCheckService?.Dispose();
+            _analyticsService?.Dispose();
             _hotkeyManager?.Dispose();
             _indicatorOverlayManager?.Dispose();
             _runningAppsManager?.Dispose();

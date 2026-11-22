@@ -172,9 +172,17 @@ namespace WinBins.Views
         private CheckBox _minimizeToTrayToggle;
         private CheckBox _startupToggle;
         private CheckBox _showPinGuideToggle;
+        private CheckBox _sendDiagnosticsToggle;
         private TextBlock _syncFolderStatusText;
         private Button _resetSyncFolderBtn;
         private TextBlock _aboutDataFolderPathText;
+
+        // Update available banner
+        private readonly UpdateCheckService _updateCheckService;
+        private Border _updateBanner;
+        private TextBlock _updateBannerText;
+        private UpdateCheckResult _availableUpdate;
+        private bool _updateBannerDismissed;
 
         public bool AllowRealClose { get; set; }
 
@@ -185,7 +193,8 @@ namespace WinBins.Views
             BinPopupWindow popupWindow,
             RunningAppsTaskbarManager runningAppsManager = null,
             GlobalHotkeyManager hotkeyManager = null,
-            Action onOpenSearch = null)
+            Action onOpenSearch = null,
+            UpdateCheckService updateCheckService = null)
         {
             _configService = configService;
             _iconService = iconService;
@@ -195,6 +204,7 @@ namespace WinBins.Views
             FluentTheme.ApplyGlobalResources(Resources);
             _hotkeyManager = hotkeyManager;
             _onOpenSearch = onOpenSearch;
+            _updateCheckService = updateCheckService;
 
             Title = "Bins";
             using (var appBmp = Win32Interop.CreateGroupMosaicBitmap(null))
@@ -511,6 +521,10 @@ namespace WinBins.Views
                     {
                         _showPinGuideToggle.IsChecked = !_configService.Current.HidePinToTaskbarPrompt;
                     }
+                    if (_sendDiagnosticsToggle != null)
+                    {
+                        _sendDiagnosticsToggle.IsChecked = _configService.Current.SendDiagnosticsAndUsage;
+                    }
 
                     if (_syncFolderStatusText != null)
                     {
@@ -691,11 +705,104 @@ namespace WinBins.Views
             _dropHighlightOverlay.Child = dropStack;
             sheetHost.Children.Add(_dropHighlightOverlay);
 
-            contentSheet.Child = sheetHost;
+            var contentStack = new Grid();
+            contentStack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            contentStack.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            _updateBanner = BuildUpdateBanner();
+            Grid.SetRow(_updateBanner, 0);
+            contentStack.Children.Add(_updateBanner);
+
+            Grid.SetRow(sheetHost, 1);
+            contentStack.Children.Add(sheetHost);
+
+            contentSheet.Child = contentStack;
             Grid.SetColumn(contentSheet, 1);
             rootGrid.Children.Add(contentSheet);
 
             Content = rootGrid;
+
+            if (_updateCheckService?.LatestAvailableUpdate != null)
+            {
+                SetAvailableUpdate(_updateCheckService.LatestAvailableUpdate);
+            }
+        }
+
+        private Border BuildUpdateBanner()
+        {
+            var banner = new Border
+            {
+                Background = FluentTheme.CardBg,
+                BorderBrush = FluentTheme.AccentBrush,
+                BorderThickness = new Thickness(0, 0, 0, 1),
+                Padding = new Thickness(16, 10, 14, 10),
+                Visibility = Visibility.Collapsed
+            };
+
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var icon = FluentTheme.CreateFluentIcon("\uE896", 15, FluentTheme.AccentBrush);
+            icon.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 10, 0));
+            Grid.SetColumn(icon, 0);
+            grid.Children.Add(icon);
+
+            _updateBannerText = new TextBlock
+            {
+                Text = "A new version of Bins is available.",
+                FontSize = 12.5,
+                Foreground = FluentTheme.TextPrimary,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            Grid.SetColumn(_updateBannerText, 1);
+            grid.Children.Add(_updateBannerText);
+
+            var viewBtn = FluentTheme.CreateButton("View update", isPrimary: true, padding: new Thickness(10, 4, 10, 4));
+            viewBtn.Margin = new Thickness(10, 0, 6, 0);
+            viewBtn.Click += (_, __) =>
+            {
+                string url = _availableUpdate?.ReleaseUrl;
+                if (!string.IsNullOrWhiteSpace(url))
+                {
+                    OpenExternalUrl(url);
+                }
+            };
+            Grid.SetColumn(viewBtn, 2);
+            grid.Children.Add(viewBtn);
+
+            var dismissBtn = FluentTheme.CreateButton("Dismiss", padding: new Thickness(8, 4, 8, 4));
+            dismissBtn.Click += (_, __) =>
+            {
+                _updateBannerDismissed = true;
+                if (_updateBanner != null)
+                    _updateBanner.Visibility = Visibility.Collapsed;
+            };
+            Grid.SetColumn(dismissBtn, 3);
+            grid.Children.Add(dismissBtn);
+
+            banner.Child = grid;
+            return banner;
+        }
+
+        public void SetAvailableUpdate(UpdateCheckResult update)
+        {
+            _availableUpdate = update;
+            if (_updateBanner == null || _updateBannerText == null)
+                return;
+
+            if (update != null && update.IsUpdateAvailable && !_updateBannerDismissed)
+            {
+                _updateBannerText.Text = $"Bins v{update.LatestVersion} is available (currently v{update.CurrentVersion}).";
+                _updateBanner.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                _updateBanner.Visibility = Visibility.Collapsed;
+            }
         }
 
         private Border BuildEmptyBinsView()
@@ -2145,6 +2252,18 @@ namespace WinBins.Views
             syncGrid.Children.Add(syncButtons);
             syncCard.Child = syncGrid;
             panel.Children.Add(syncCard);
+
+            // --- PRIVACY ---
+            panel.Children.Add(CreateSettingsSectionHeader("Privacy"));
+
+            _sendDiagnosticsToggle = FluentTheme.CreateToggleCheckBox(null, true);
+            _sendDiagnosticsToggle.Checked += GlobalSetting_Changed;
+            _sendDiagnosticsToggle.Unchecked += GlobalSetting_Changed;
+            panel.Children.Add(CreateSettingsCard(
+                "\uE9D9",
+                "Send diagnostics & usage",
+                "Share anonymous daily/weekly usage, app version, feature adoption, and error counts to help improve Bins. No personal data, file paths, or app names are ever collected.",
+                _sendDiagnosticsToggle));
 
             scroll.Content = panel;
             return scroll;
@@ -5355,8 +5474,11 @@ namespace WinBins.Views
                     return;
                 }
 
+                _updateCheckService?.RecordManualCheckResult(res);
+
                 if (res.IsUpdateAvailable)
                 {
+                    SetAvailableUpdate(res);
                     bool openRelease = ContentDialogWindow.ShowConfirm(
                         this,
                         "Update Available",
@@ -5612,6 +5734,10 @@ namespace WinBins.Views
             if (_showPinGuideToggle != null)
             {
                 _configService.Current.HidePinToTaskbarPrompt = _showPinGuideToggle.IsChecked != true;
+            }
+            if (_sendDiagnosticsToggle != null)
+            {
+                _configService.Current.SendDiagnosticsAndUsage = _sendDiagnosticsToggle.IsChecked == true;
             }
 
             bool globalHide = _hideRunningAppsGlobalToggle?.IsChecked == true;

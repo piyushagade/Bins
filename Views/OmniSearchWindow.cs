@@ -418,7 +418,11 @@ namespace WinBins.Views
             Grid.SetColumn(iconImg, 0);
             grid.Children.Add(iconImg);
 
-            var textStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            var textStack = new StackPanel
+            {
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 10, 0)
+            };
             var nameRow = new StackPanel { Orientation = Orientation.Horizontal };
             nameRow.Children.Add(new TextBlock
             {
@@ -454,7 +458,7 @@ namespace WinBins.Views
                 FontSize = 11,
                 Foreground = FluentTheme.TextMuted,
                 TextTrimming = TextTrimming.CharacterEllipsis,
-                MaxWidth = 330
+                HorizontalAlignment = HorizontalAlignment.Left
             });
             Grid.SetColumn(textStack, 1);
             grid.Children.Add(textStack);

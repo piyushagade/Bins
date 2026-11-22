@@ -81,6 +81,8 @@
     <Compile Include="Services\JumpListService.cs" />
     <Compile Include="Services\GlobalHotkeyManager.cs" />
     <Compile Include="Services\BackupSyncService.cs" />
+    <Compile Include="Services\AnalyticsService.cs" />
+    <Compile Include="Services\UpdateCheckService.cs" />
     <Compile Include="Services\ShellContextMenuService.cs" />
     <Compile Include="Services\RunningAppsTaskbarManager.cs" />
     <Compile Include="Services\TaskbarBinHostManager.cs" />

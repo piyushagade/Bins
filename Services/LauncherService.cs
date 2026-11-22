@@ -23,6 +23,8 @@ namespace WinBins.Services
 
     public static class LauncherService
     {
+        public static event Action WorkspaceLaunched;
+
         public static ProcessWindowStyle MapWindowStyle(BinWindowStyle style)
         {
             switch (style)
@@ -530,6 +532,11 @@ namespace WinBins.Services
                     catch { }
                 }
                 return;
+            }
+
+            if (targets.Count > 0)
+            {
+                try { WorkspaceLaunched?.Invoke(); } catch { }
             }
 
             foreach (BinItem item in targets)
