@@ -106,7 +106,7 @@ namespace WinBins.Views
 
             _dismissTimer = new DispatcherTimer(DispatcherPriority.Input)
             {
-                Interval = TimeSpan.FromMilliseconds(105)
+                Interval = TimeSpan.FromMilliseconds(55)
             };
             _dismissTimer.Tick += DismissTimer_Tick;
 
@@ -238,7 +238,7 @@ namespace WinBins.Views
             _lastAnchorPx = anchorScreenPx;
             _outsideStartTick = 0;
 
-            Win32Interop.DismissTaskbarThumbnailWindows();
+            Win32Interop.DismissTaskbarThumbnailWindows(anchorScreenPx, cancelTrayHoverTooltip: true);
             RebuildRows(running);
 
             if (!IsVisible)
@@ -537,7 +537,8 @@ namespace WinBins.Views
                 }
             }
 
-            if (!insideSafeZone && _taskbarManager != null &&
+            bool insideButton = false;
+            if (_taskbarManager != null &&
                 _taskbarManager.TryGetBinTaskbarRect(_currentBin.Id, out Rect btnRect))
             {
                 const double btnPad = 14;
@@ -545,6 +546,16 @@ namespace WinBins.Views
                     pt.Y >= btnRect.Top - 24 && pt.Y <= btnRect.Bottom + btnPad)
                 {
                     insideSafeZone = true;
+                    insideButton = true;
+                }
+            }
+
+            if (insideButton)
+            {
+                // Suppress any delayed Windows 11 taskbar button title tooltip while hovering the Bin button
+                if (Win32Interop.DismissTaskbarThumbnailWindows(_lastAnchorPx, cancelTrayHoverTooltip: false))
+                {
+                    Win32Interop.DismissTaskbarThumbnailWindows(_lastAnchorPx, cancelTrayHoverTooltip: true);
                 }
             }
 

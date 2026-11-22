@@ -584,7 +584,7 @@ namespace WinBins.Services
             {
                 int thresholdMs = isDragHoverCandidate
                     ? 340
-                    : (hoverEnabled ? Math.Max(120, _configService.Current?.HoverOpenDelayMs ?? 280) : 360);
+                    : (hoverEnabled ? Math.Max(120, _configService.Current?.HoverOpenDelayMs ?? 280) : 260);
 
                 if (Math.Abs(Environment.TickCount - _hoverEnterTick) >= thresholdMs)
                 {
@@ -598,7 +598,7 @@ namespace WinBins.Services
 
                         if (hoverEnabled || isDragHoverCandidate)
                         {
-                            Win32Interop.DismissTaskbarThumbnailWindows();
+                            Win32Interop.DismissTaskbarThumbnailWindows(anchorPt, cancelTrayHoverTooltip: true);
                             BinTaskbarHoverTriggered?.Invoke(bin, anchorPt, isDragHoverCandidate);
                         }
                         else if (!leftDown)

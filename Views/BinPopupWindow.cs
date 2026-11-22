@@ -523,14 +523,28 @@ namespace WinBins.Views
                 }
             }
 
-            if (!insideSafeZone && _taskbarManager != null &&
-                _taskbarManager.TryGetBinTaskbarRect(_currentBin.Id, out Rect btnRect))
+            bool insideButton = false;
+            Rect btnRect = Rect.Empty;
+            if (_taskbarManager != null &&
+                _taskbarManager.TryGetBinTaskbarRect(_currentBin.Id, out btnRect))
             {
                 const double btnPad = 14;
                 if (pt.X >= btnRect.Left - btnPad && pt.X <= btnRect.Right + btnPad &&
                     pt.Y >= btnRect.Top - 24 && pt.Y <= btnRect.Bottom + btnPad)
                 {
                     insideSafeZone = true;
+                    insideButton = true;
+                }
+            }
+
+            if (insideButton)
+            {
+                var btnAnchor = new System.Drawing.Point(
+                    (int)Math.Round(btnRect.Left + btnRect.Width / 2.0),
+                    (int)Math.Round(btnRect.Top + btnRect.Height / 2.0));
+                if (Win32Interop.DismissTaskbarThumbnailWindows(btnAnchor, cancelTrayHoverTooltip: false))
+                {
+                    Win32Interop.DismissTaskbarThumbnailWindows(btnAnchor, cancelTrayHoverTooltip: true);
                 }
             }
 
