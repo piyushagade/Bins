@@ -114,6 +114,7 @@ namespace WinBins.Views
         private TextBlock _flyoutIconBtnLabel;
         private Button _clearFlyoutIconBtn;
         private CheckBox _showTitleToggle;
+        private CheckBox _showLaunchAllToggle;
         private CheckBox _showAddToggle;
         private CheckBox _showEditToggle;
         private CheckBox _hideRunningAppsBinToggle;
@@ -1483,6 +1484,13 @@ namespace WinBins.Views
             controlsRows.Children.Add(CreateFlyoutSettingRow("Title", _showTitleToggle));
             controlsRows.Children.Add(CreateSettingsRowDivider());
 
+            _showLaunchAllToggle = FluentTheme.CreateToggleCheckBox(null, false);
+            _showLaunchAllToggle.ToolTip = "Show a one-click Launch All button in the Bin flyout header to open all apps in this Bin at once";
+            _showLaunchAllToggle.Checked += FlyoutHeaderVisibility_Changed;
+            _showLaunchAllToggle.Unchecked += FlyoutHeaderVisibility_Changed;
+            controlsRows.Children.Add(CreateFlyoutSettingRow("Launch all button", _showLaunchAllToggle));
+            controlsRows.Children.Add(CreateSettingsRowDivider());
+
             _showAddToggle = FluentTheme.CreateToggleCheckBox(null, true);
             _showAddToggle.Checked += FlyoutHeaderVisibility_Changed;
             _showAddToggle.Unchecked += FlyoutHeaderVisibility_Changed;
@@ -1967,7 +1975,7 @@ namespace WinBins.Views
             panel.Children.Add(CreateSettingsCard(
                 "\uE8A7",
                 "Close popup after launching",
-                "Automatically dismiss the Bin flyout when you open an item",
+                "Automatically dismiss the Bin flyout when you open an item. Turn off to keep the Bin open and on top across launches.",
                 _closeOnLaunchToggle));
 
             _hideRunningAppsGlobalToggle = FluentTheme.CreateToggleCheckBox(null, false);
@@ -3324,6 +3332,10 @@ namespace WinBins.Views
             }
 
             _showTitleToggle.IsChecked = _selectedBin.ShowFlyoutTitle;
+            if (_showLaunchAllToggle != null)
+            {
+                _showLaunchAllToggle.IsChecked = _selectedBin.ShowFlyoutLaunchAllButton;
+            }
             _showAddToggle.IsChecked = _selectedBin.ShowFlyoutAddButton;
             _showEditToggle.IsChecked = _selectedBin.ShowFlyoutEditButton;
             if (_hideRunningAppsBinToggle != null)
@@ -4671,11 +4683,9 @@ namespace WinBins.Views
                 return;
 
             _selectedBin.AccentColorHex = normalized;
-            if (!string.IsNullOrEmpty(normalized) && _selectedBin.IconMode == BinIconMode.GridMosaic)
-            {
-                _selectedBin.ShowMosaicBackplate = true;
-            }
-            SaveAndSyncSelectedBin(bumpIcon: true);
+            bool iconUsesAccent = _selectedBin.ShowMosaicBackplate || _selectedBin.IconMode == BinIconMode.BadgeMonogram;
+            SaveAndSyncSelectedBin(bumpIcon: iconUsesAccent);
+            _runningAppsManager?.SyncRunningWindows();
         }
 
         private void SetSectionLayout(BinSectionLayout layout)
@@ -4983,6 +4993,10 @@ namespace WinBins.Views
                 return;
 
             _selectedBin.ShowFlyoutTitle = _showTitleToggle.IsChecked == true;
+            if (_showLaunchAllToggle != null)
+            {
+                _selectedBin.ShowFlyoutLaunchAllButton = _showLaunchAllToggle.IsChecked == true;
+            }
             _selectedBin.ShowFlyoutAddButton = _showAddToggle.IsChecked == true;
             _selectedBin.ShowFlyoutEditButton = _showEditToggle.IsChecked == true;
             SaveAndSyncSelectedBin(bumpIcon: false);

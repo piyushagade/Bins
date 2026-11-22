@@ -39,6 +39,8 @@ namespace WinBins.Services
             new Dictionary<string, IndicatorSlotWindow>(StringComparer.OrdinalIgnoreCase);
 
         private readonly DispatcherTimer _fastWatchTimer;
+        private readonly DispatcherTimer _settleBurstTimer;
+        private int _settleBurstStepsRemaining;
         private bool _classRegistered;
         private int _lastRectRequestTick;
         private bool _disposed;
@@ -60,13 +62,55 @@ namespace WinBins.Services
             _taskbarManager.TaskbarPinStateChanged += OnStateChanged;
             FluentTheme.ThemeChanged += SyncIndicators;
 
-            // Lightweight check for fullscreen video/games, auto-hide taskbar animation, and foreground changes
+            // Fast post-animation settle burst timer (~130ms intervals across ~520ms) so centered taskbar slide animations
+            // snap indicators right under their Bins as soon as icons settle.
+            _settleBurstTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(130)
+            };
+            _settleBurstTimer.Tick += (_, __) =>
+            {
+                if (_disposed || _settleBurstStepsRemaining <= 0 || _overlays.Count == 0)
+                {
+                    _settleBurstStepsRemaining = 0;
+                    _settleBurstTimer.Stop();
+                    return;
+                }
+
+                _settleBurstStepsRemaining--;
+                _taskbarManager.RefreshCachedButtonRectsFastAsync(_overlays.Keys.ToList());
+                if (_settleBurstStepsRemaining <= 0)
+                {
+                    _settleBurstTimer.Stop();
+                }
+            };
+
+            // Continuous lightweight watch when indicators are visible (~550ms cached-element BoundingRectangle check)
             _fastWatchTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
             {
-                Interval = TimeSpan.FromMilliseconds(1500)
+                Interval = TimeSpan.FromMilliseconds(550)
             };
-            _fastWatchTimer.Tick += (_, __) => SyncIndicators();
+            _fastWatchTimer.Tick += (_, __) =>
+            {
+                if (_overlays.Count > 0)
+                {
+                    _taskbarManager.RefreshCachedButtonRectsFastAsync(_overlays.Keys.ToList());
+                }
+                SyncIndicators();
+            };
             _fastWatchTimer.Start();
+        }
+
+        public void NotifyTaskbarLayoutShifted()
+        {
+            if (_disposed)
+                return;
+
+            _settleBurstStepsRemaining = 4;
+            if (!_settleBurstTimer.IsEnabled)
+            {
+                _settleBurstTimer.Start();
+            }
         }
 
         private void OnStateChanged()
@@ -74,16 +118,21 @@ namespace WinBins.Services
             if (_disposed)
                 return;
 
-            // Only fires when foreground/hidden windows actually change (not on idle polls).
-            // Re-scan taskbar button rects (throttled) so indicators track centered Windows 11 taskbar shifts.
-            int now = Environment.TickCount;
-            if (Math.Abs(now - _lastRectRequestTick) > 2000)
-            {
-                _lastRectRequestTick = now;
-                _taskbarManager.RequestButtonRectRefresh();
-            }
-
             SyncIndicators();
+
+            if (_overlays.Count > 0)
+            {
+                NotifyTaskbarLayoutShifted();
+            }
+            else
+            {
+                int now = Environment.TickCount;
+                if (Math.Abs(now - _lastRectRequestTick) > 2000)
+                {
+                    _lastRectRequestTick = now;
+                    _taskbarManager.RequestButtonRectRefresh();
+                }
+            }
         }
 
         private void EnsureWindowClass()
@@ -288,7 +337,7 @@ namespace WinBins.Services
                 using (Bitmap stripBmp = RenderIndicatorStripBitmap(fgFlags, accentColor, lightTheme, scale, maxStripWidth))
                 {
                     int dstX = (int)Math.Round(btnRect.Left + (btnRect.Width - stripBmp.Width) / 2.0);
-                    int dstY = (int)Math.Round(btnRect.Bottom - stripBmp.Height - Math.Max(1.0, 0.8 * scale));
+                    int dstY = (int)Math.Round(btnRect.Bottom - stripBmp.Height - Math.Max(2.0, 2.2 * scale));
                     ApplyLayeredBitmap(slot.Hwnd, stripBmp, dstX, dstY);
                 }
                 slot.LastSignature = signature;
@@ -505,6 +554,7 @@ namespace WinBins.Services
 
             _disposed = true;
             try { _fastWatchTimer?.Stop(); } catch { }
+            try { _settleBurstTimer?.Stop(); } catch { }
             _runningAppsManager.RunningStateChanged -= OnStateChanged;
             _taskbarManager.TaskbarButtonRectsUpdated -= SyncIndicators;
             _taskbarManager.TaskbarPinStateChanged -= OnStateChanged;

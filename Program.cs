@@ -369,8 +369,10 @@ namespace WinBins
                     _hotkeyManager,
                     onOpenSearch: () => EnsureOmniSearchWindow().ShowSearch());
 
+                win.IsVisibleChanged += (_, __) => _indicatorOverlayManager?.NotifyTaskbarLayoutShifted();
                 win.Closed += (_, __) =>
                 {
+                    _indicatorOverlayManager?.NotifyTaskbarLayoutShifted();
                     if (ReferenceEquals(_mainWindow, win))
                     {
                         _mainWindow = null;

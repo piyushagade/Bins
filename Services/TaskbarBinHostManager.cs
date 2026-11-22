@@ -37,6 +37,8 @@ namespace WinBins.Services
 
         private readonly object _buttonRectsLock = new object();
         private Dictionary<string, System.Windows.Rect> _cachedButtonRects = new Dictionary<string, System.Windows.Rect>(StringComparer.OrdinalIgnoreCase);
+        private Dictionary<string, AutomationElement> _cachedButtonElements = new Dictionary<string, AutomationElement>(StringComparer.OrdinalIgnoreCase);
+        private volatile bool _fastRefreshingRects;
         private long _lastButtonRectScanTick;
         private string _hoveredBinId;
         private int _hoverEnterTick;
@@ -629,6 +631,95 @@ namespace WinBins.Services
             CaptureTaskbarOrderAsync(forceRectScan: true);
         }
 
+        /// <summary>
+        /// Ultra-fast (~0.1ms) background query of cached AutomationElement.BoundingRectangle for active Bins
+        /// so bottom indicators stay locked onto centered Windows 11 taskbar buttons as apps open/close/animate.
+        /// Falls back to a full UIA button scan only if an element is missing or invalidated.
+        /// </summary>
+        public void RefreshCachedButtonRectsFastAsync(IList<string> targetBinIds)
+        {
+            if (targetBinIds == null || targetBinIds.Count == 0 || _fastRefreshingRects || _capturingOrder)
+                return;
+
+            _fastRefreshingRects = true;
+            Task.Run(() =>
+            {
+                try
+                {
+                    var pairs = new List<Tuple<string, AutomationElement>>(targetBinIds.Count);
+                    lock (_buttonRectsLock)
+                    {
+                        foreach (string id in targetBinIds)
+                        {
+                            if (!_cachedButtonElements.TryGetValue(id, out AutomationElement el) || el == null)
+                            {
+                                CaptureTaskbarOrderAsync(forceRectScan: true);
+                                return;
+                            }
+                            pairs.Add(Tuple.Create(id, el));
+                        }
+                    }
+
+                    var updated = new Dictionary<string, System.Windows.Rect>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var pair in pairs)
+                    {
+                        try
+                        {
+                            System.Windows.Rect r = pair.Item2.Current.BoundingRectangle;
+                            if (r.IsEmpty || double.IsInfinity(r.Left) || double.IsNaN(r.Left) || r.Width < 12 || r.Height < 12)
+                            {
+                                lock (_buttonRectsLock)
+                                {
+                                    _cachedButtonElements.Remove(pair.Item1);
+                                }
+                                CaptureTaskbarOrderAsync(forceRectScan: true);
+                                return;
+                            }
+                            updated[pair.Item1] = r;
+                        }
+                        catch
+                        {
+                            lock (_buttonRectsLock)
+                            {
+                                _cachedButtonElements.Remove(pair.Item1);
+                            }
+                            CaptureTaskbarOrderAsync(forceRectScan: true);
+                            return;
+                        }
+                    }
+
+                    bool anyMoved = false;
+                    lock (_buttonRectsLock)
+                    {
+                        foreach (var kv in updated)
+                        {
+                            if (!_cachedButtonRects.TryGetValue(kv.Key, out System.Windows.Rect prev) ||
+                                Math.Abs(prev.Left - kv.Value.Left) >= 0.5 ||
+                                Math.Abs(prev.Top - kv.Value.Top) >= 0.5 ||
+                                Math.Abs(prev.Width - kv.Value.Width) >= 0.5 ||
+                                Math.Abs(prev.Height - kv.Value.Height) >= 0.5)
+                            {
+                                _cachedButtonRects[kv.Key] = kv.Value;
+                                anyMoved = true;
+                            }
+                        }
+                    }
+
+                    if (anyMoved)
+                    {
+                        _dispatcher.BeginInvoke(new Action(() => TaskbarButtonRectsUpdated?.Invoke()));
+                    }
+                }
+                catch
+                {
+                }
+                finally
+                {
+                    _fastRefreshingRects = false;
+                }
+            });
+        }
+
         private List<string> GetAllTaskbarActiveBinIds()
         {
             var bins = _configService.Current?.Bins;
@@ -666,12 +757,16 @@ namespace WinBins.Services
             {
                 try
                 {
-                    var orderedIds = ReadBinOrderAndRectsFromTaskbarUiAutomation(activeBinIds, out Dictionary<string, System.Windows.Rect> rects);
+                    var orderedIds = ReadBinOrderAndRectsFromTaskbarUiAutomation(
+                        activeBinIds,
+                        out Dictionary<string, System.Windows.Rect> rects,
+                        out Dictionary<string, AutomationElement> elements);
                     if (rects != null)
                     {
                         lock (_buttonRectsLock)
                         {
                             _cachedButtonRects = rects;
+                            _cachedButtonElements = elements ?? new Dictionary<string, AutomationElement>(StringComparer.OrdinalIgnoreCase);
                             _lastButtonRectScanTick = Environment.TickCount;
                         }
                     }
@@ -703,12 +798,16 @@ namespace WinBins.Services
 
             try
             {
-                var orderedIds = ReadBinOrderAndRectsFromTaskbarUiAutomation(activeBinIds, out Dictionary<string, System.Windows.Rect> rects);
+                var orderedIds = ReadBinOrderAndRectsFromTaskbarUiAutomation(
+                    activeBinIds,
+                    out Dictionary<string, System.Windows.Rect> rects,
+                    out Dictionary<string, AutomationElement> elements);
                 if (rects != null)
                 {
                     lock (_buttonRectsLock)
                     {
                         _cachedButtonRects = rects;
+                        _cachedButtonElements = elements ?? new Dictionary<string, AutomationElement>(StringComparer.OrdinalIgnoreCase);
                         _lastButtonRectScanTick = Environment.TickCount;
                     }
                 }
@@ -748,9 +847,11 @@ namespace WinBins.Services
 
         private static List<string> ReadBinOrderAndRectsFromTaskbarUiAutomation(
             List<string> activeBinIds,
-            out Dictionary<string, System.Windows.Rect> foundRects)
+            out Dictionary<string, System.Windows.Rect> foundRects,
+            out Dictionary<string, AutomationElement> foundElements)
         {
             foundRects = new Dictionary<string, System.Windows.Rect>(StringComparer.OrdinalIgnoreCase);
+            foundElements = new Dictionary<string, AutomationElement>(StringComparer.OrdinalIgnoreCase);
             if (activeBinIds == null || activeBinIds.Count == 0)
                 return null;
 
@@ -789,6 +890,7 @@ namespace WinBins.Services
                             {
                                 matchedSet.Add(binId);
                                 foundRects[binId] = rect;
+                                foundElements[binId] = btn;
                                 foundPositions.Add(Tuple.Create(binId, rect.Left));
                             }
                             break;
