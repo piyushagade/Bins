@@ -3,7 +3,7 @@
 
 #define MyAppName "Bins for Windows 11"
 #ifndef MyAppVersion
-  #define MyAppVersion "1.5.0"
+  #define MyAppVersion "1.5.1"
 #endif
 #define MyAppPublisher "Piyush Agade"
 #define MyAppURL "https://github.com/piyushagade/Bins"

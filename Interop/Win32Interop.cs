@@ -1121,24 +1121,7 @@ namespace WinBins.Interop
 
                 if (showBackplate)
                 {
-                    var plateRect = new Rectangle(2, 2, 124, 124);
-                    Color topFill = tintColor.HasValue
-                        ? Color.FromArgb(224, BlendByte(tintColor.Value.R, 30, 0.72), BlendByte(tintColor.Value.G, 32, 0.72), BlendByte(tintColor.Value.B, 38, 0.72))
-                        : Color.FromArgb(205, 48, 52, 62);
-                    Color botFill = tintColor.HasValue
-                        ? Color.FromArgb(214, BlendByte(tintColor.Value.R, 16, 0.48), BlendByte(tintColor.Value.G, 18, 0.48), BlendByte(tintColor.Value.B, 24, 0.48))
-                        : Color.FromArgb(195, 30, 32, 40);
-                    Color strokeCol = tintColor.HasValue
-                        ? Color.FromArgb(150, BlendByte(tintColor.Value.R, 255, 0.62), BlendByte(tintColor.Value.G, 255, 0.62), BlendByte(tintColor.Value.B, 255, 0.62))
-                        : Color.FromArgb(85, 255, 255, 255);
-
-                    using (GraphicsPath platePath = CreateRoundedRectPath(plateRect, 28))
-                    using (var fillBrush = new LinearGradientBrush(plateRect, topFill, botFill, LinearGradientMode.Vertical))
-                    using (var borderPen = new Pen(strokeCol, 2.5f))
-                    {
-                        g.FillPath(fillBrush, platePath);
-                        g.DrawPath(borderPen, platePath);
-                    }
+                    DrawMosaicBackplate(g, tintColor);
                 }
 
                 using (var imageAttrs = new ImageAttributes())
@@ -1153,22 +1136,22 @@ namespace WinBins.Interop
                                 DrawEmptyPlaceholderGrid(g, inset: true);
                                 break;
                             case 1:
-                                DrawSubIcon(g, validIcons[0], new Rectangle(20, 20, 88, 88), imageAttrs);
+                                DrawSubIcon(g, validIcons[0], new Rectangle(12, 12, 104, 104), imageAttrs);
                                 break;
                             case 2:
-                                DrawSubIcon(g, validIcons[0], new Rectangle(13, 13, 48, 48), imageAttrs);
-                                DrawSubIcon(g, validIcons[1], new Rectangle(67, 67, 48, 48), imageAttrs);
+                                DrawSubIcon(g, validIcons[0], new Rectangle(5, 5, 57, 57), imageAttrs);
+                                DrawSubIcon(g, validIcons[1], new Rectangle(66, 66, 57, 57), imageAttrs);
                                 break;
                             case 3:
-                                DrawSubIcon(g, validIcons[0], new Rectangle(13, 13, 47, 47), imageAttrs);
-                                DrawSubIcon(g, validIcons[1], new Rectangle(68, 13, 47, 47), imageAttrs);
-                                DrawSubIcon(g, validIcons[2], new Rectangle(40, 68, 47, 47), imageAttrs);
+                                DrawSubIcon(g, validIcons[0], new Rectangle(5, 5, 55, 55), imageAttrs);
+                                DrawSubIcon(g, validIcons[1], new Rectangle(68, 5, 55, 55), imageAttrs);
+                                DrawSubIcon(g, validIcons[2], new Rectangle(36, 68, 55, 55), imageAttrs);
                                 break;
                             default:
-                                DrawSubIcon(g, validIcons[0], new Rectangle(13, 13, 47, 47), imageAttrs);
-                                DrawSubIcon(g, validIcons[1], new Rectangle(68, 13, 47, 47), imageAttrs);
-                                DrawSubIcon(g, validIcons[2], new Rectangle(13, 68, 47, 47), imageAttrs);
-                                DrawSubIcon(g, validIcons[3], new Rectangle(68, 68, 47, 47), imageAttrs);
+                                DrawSubIcon(g, validIcons[0], new Rectangle(5, 5, 55, 55), imageAttrs);
+                                DrawSubIcon(g, validIcons[1], new Rectangle(68, 5, 55, 55), imageAttrs);
+                                DrawSubIcon(g, validIcons[2], new Rectangle(5, 68, 55, 55), imageAttrs);
+                                DrawSubIcon(g, validIcons[3], new Rectangle(68, 68, 55, 55), imageAttrs);
                                 break;
                         }
                     }
@@ -1215,23 +1198,26 @@ namespace WinBins.Interop
 
         private static void DrawMosaicBackplate(Graphics g, Color? tintColor)
         {
-            var plateRect = new Rectangle(2, 2, 124, 124);
+            // Full-bleed 128x128 backplate so Bins with a backplate match the full footprint of unplated Bins
+            var fullRect = new Rectangle(0, 0, 128, 128);
+            var strokeRect = new Rectangle(1, 1, 126, 126);
             Color topFill = tintColor.HasValue
-                ? Color.FromArgb(228, BlendByte(tintColor.Value.R, 30, 0.72), BlendByte(tintColor.Value.G, 32, 0.72), BlendByte(tintColor.Value.B, 38, 0.72))
-                : Color.FromArgb(205, 48, 52, 62);
+                ? Color.FromArgb(232, BlendByte(tintColor.Value.R, 30, 0.72), BlendByte(tintColor.Value.G, 32, 0.72), BlendByte(tintColor.Value.B, 38, 0.72))
+                : Color.FromArgb(215, 48, 52, 62);
             Color botFill = tintColor.HasValue
-                ? Color.FromArgb(218, BlendByte(tintColor.Value.R, 16, 0.48), BlendByte(tintColor.Value.G, 18, 0.48), BlendByte(tintColor.Value.B, 24, 0.48))
-                : Color.FromArgb(195, 30, 32, 40);
+                ? Color.FromArgb(222, BlendByte(tintColor.Value.R, 16, 0.48), BlendByte(tintColor.Value.G, 18, 0.48), BlendByte(tintColor.Value.B, 24, 0.48))
+                : Color.FromArgb(205, 30, 32, 40);
             Color strokeCol = tintColor.HasValue
-                ? Color.FromArgb(150, BlendByte(tintColor.Value.R, 255, 0.62), BlendByte(tintColor.Value.G, 255, 0.62), BlendByte(tintColor.Value.B, 255, 0.62))
-                : Color.FromArgb(85, 255, 255, 255);
+                ? Color.FromArgb(145, BlendByte(tintColor.Value.R, 255, 0.62), BlendByte(tintColor.Value.G, 255, 0.62), BlendByte(tintColor.Value.B, 255, 0.62))
+                : Color.FromArgb(76, 255, 255, 255);
 
-            using (GraphicsPath platePath = CreateRoundedRectPath(plateRect, 28))
-            using (var fillBrush = new LinearGradientBrush(plateRect, topFill, botFill, LinearGradientMode.Vertical))
-            using (var borderPen = new Pen(strokeCol, 2.5f))
+            using (GraphicsPath fillPath = CreateRoundedRectPath(fullRect, 15))
+            using (GraphicsPath strokePath = CreateRoundedRectPath(strokeRect, 14))
+            using (var fillBrush = new LinearGradientBrush(fullRect, topFill, botFill, LinearGradientMode.Vertical))
+            using (var borderPen = new Pen(strokeCol, 1.8f))
             {
-                g.FillPath(fillBrush, platePath);
-                g.DrawPath(borderPen, platePath);
+                g.FillPath(fillBrush, fillPath);
+                g.DrawPath(borderPen, strokePath);
             }
         }
 
@@ -1275,7 +1261,7 @@ namespace WinBins.Interop
                 using (var imageAttrs = new ImageAttributes())
                 {
                     imageAttrs.SetWrapMode(WrapMode.TileFlipXY);
-                    int margin = showBackplate ? 14 : 4;
+                    int margin = showBackplate ? 6 : 4;
                     int gap = showBackplate ? 5 : 6;
                     int cell = (canvasSize - 2 * margin - 2 * gap) / 3;
 
@@ -1425,13 +1411,15 @@ namespace WinBins.Interop
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
 
-                var plateRect = new Rectangle(4, 4, 120, 120);
-                using (GraphicsPath platePath = CreateRoundedRectPath(plateRect, 28))
-                using (var fillBrush = new LinearGradientBrush(plateRect, topFill, botFill, LinearGradientMode.ForwardDiagonal))
-                using (var borderPen = new Pen(strokeCol, 2.5f))
+                var fullRect = new Rectangle(0, 0, 128, 128);
+                var strokeRect = new Rectangle(1, 1, 126, 126);
+                using (GraphicsPath fillPath = CreateRoundedRectPath(fullRect, 18))
+                using (GraphicsPath strokePath = CreateRoundedRectPath(strokeRect, 17))
+                using (var fillBrush = new LinearGradientBrush(fullRect, topFill, botFill, LinearGradientMode.ForwardDiagonal))
+                using (var borderPen = new Pen(strokeCol, 2.0f))
                 {
-                    g.FillPath(fillBrush, platePath);
-                    g.DrawPath(borderPen, platePath);
+                    g.FillPath(fillBrush, fillPath);
+                    g.DrawPath(borderPen, strokePath);
                 }
 
                 // Detect if text contains non-ASCII/emoji symbols
@@ -1488,10 +1476,10 @@ namespace WinBins.Interop
             Rectangle[] slots = inset
                 ? new[]
                 {
-                    new Rectangle(15, 15, 44, 44),
-                    new Rectangle(69, 15, 44, 44),
-                    new Rectangle(15, 69, 44, 44),
-                    new Rectangle(69, 69, 44, 44)
+                    new Rectangle(5, 5, 55, 55),
+                    new Rectangle(68, 5, 55, 55),
+                    new Rectangle(5, 68, 55, 55),
+                    new Rectangle(68, 68, 55, 55)
                 }
                 : new[]
                 {
