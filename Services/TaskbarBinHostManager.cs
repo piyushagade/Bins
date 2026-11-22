@@ -23,11 +23,11 @@ namespace WinBins.Services
 
         // Keep WndProc delegate rooted for process lifetime so GC never collects native callback
         private readonly Win32Interop.WndProcDelegate _wndProcDelegate;
-        private readonly DispatcherTimer _orderPollTimer;
         private readonly DispatcherTimer _pinSyncDebounceTimer;
         private readonly DispatcherTimer _pinFollowUpTimer;
         private readonly DispatcherTimer _taskbandStampTimer;
         private readonly DispatcherTimer _hoverMonitorTimer;
+        private readonly EventHandler _displaySettingsChangedHandler;
         private FileSystemWatcher _pinnedWatcher;
         private FileSystemWatcher _implicitPinnedWatcher;
         private long _lastTaskbandStamp;
@@ -72,13 +72,6 @@ namespace WinBins.Services
             _dispatcher = dispatcher;
             _wndProcDelegate = WndProc;
 
-            _orderPollTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
-            {
-                Interval = TimeSpan.FromSeconds(8)
-            };
-            _orderPollTimer.Tick += (_, __) => CaptureTaskbarOrderAsync();
-            _orderPollTimer.Start();
-
             _pinSyncDebounceTimer = new DispatcherTimer(DispatcherPriority.Normal, _dispatcher)
             {
                 Interval = TimeSpan.FromMilliseconds(260)
@@ -98,7 +91,7 @@ namespace WinBins.Services
             _lastTaskbandStamp = ShortcutService.GetTaskbandPinStamp();
             _taskbandStampTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
             {
-                Interval = TimeSpan.FromMilliseconds(650)
+                Interval = TimeSpan.FromMilliseconds(1500)
             };
             _taskbandStampTimer.Tick += (_, __) =>
             {
@@ -106,6 +99,7 @@ namespace WinBins.Services
                 if (currentStamp != _lastTaskbandStamp)
                 {
                     _lastTaskbandStamp = currentStamp;
+                    ShortcutService.InvalidatePinnedCache();
                     SchedulePinnedSync();
                 }
             };
@@ -113,16 +107,29 @@ namespace WinBins.Services
 
             _hoverMonitorTimer = new DispatcherTimer(DispatcherPriority.Input, _dispatcher)
             {
-                Interval = TimeSpan.FromMilliseconds(95)
+                Interval = TimeSpan.FromMilliseconds(110)
             };
             _hoverMonitorTimer.Tick += HoverMonitorTimer_Tick;
             _hoverMonitorTimer.Start();
+
+            _displaySettingsChangedHandler = (_, __) =>
+            {
+                _dispatcher.BeginInvoke(new Action(() => CaptureTaskbarOrderAsync(forceRectScan: true)));
+            };
+            try
+            {
+                Microsoft.Win32.SystemEvents.DisplaySettingsChanged += _displaySettingsChangedHandler;
+            }
+            catch
+            {
+            }
 
             InitializePinnedFolderWatcher();
         }
 
         private void SchedulePinnedSync()
         {
+            ShortcutService.InvalidatePinnedCache();
             _pinSyncDebounceTimer.Stop();
             _pinSyncDebounceTimer.Start();
             _pinFollowUpTimer.Stop();
@@ -539,7 +546,7 @@ namespace WinBins.Services
 
             bool isDragHoverCandidate = leftDown && _wasLeftButtonDownOutsideTray;
 
-            // Refresh cached button rects in background if empty or older than 6 seconds
+            // Refresh cached button rects in background if empty or older than 30 seconds
             long nowTick = Environment.TickCount;
             bool needRefresh;
             string matchedBinId = null;
@@ -547,7 +554,7 @@ namespace WinBins.Services
 
             lock (_buttonRectsLock)
             {
-                needRefresh = _cachedButtonRects.Count == 0 || Math.Abs(nowTick - _lastButtonRectScanTick) > 6000;
+                needRefresh = _cachedButtonRects.Count == 0 || Math.Abs(nowTick - _lastButtonRectScanTick) > 30000;
                 foreach (var kv in _cachedButtonRects)
                 {
                     System.Windows.Rect r = kv.Value;
@@ -751,12 +758,50 @@ namespace WinBins.Services
             if (trayHwnd == IntPtr.Zero)
                 return null;
 
-            AutomationElement trayEl = AutomationElement.FromHandle(trayHwnd);
-            if (trayEl == null)
+            // On Windows 10, scope UIA directly to MSTaskListWClass so we skip Start/Search/System Tray/Clock.
+            // On Windows 11, taskbar buttons live in XAML directly under Shell_TrayWnd.
+            IntPtr searchHwnd = trayHwnd;
+            IntPtr rebar = Win32Interop.FindWindowExW(trayHwnd, IntPtr.Zero, "ReBarWindow32", null);
+            if (rebar != IntPtr.Zero)
+            {
+                IntPtr taskSw = Win32Interop.FindWindowExW(rebar, IntPtr.Zero, "MSTaskSwWClass", null);
+                if (taskSw != IntPtr.Zero)
+                {
+                    IntPtr taskList = Win32Interop.FindWindowExW(taskSw, IntPtr.Zero, "MSTaskListWClass", null);
+                    if (taskList != IntPtr.Zero)
+                    {
+                        searchHwnd = taskList;
+                    }
+                }
+            }
+
+            AutomationElement rootEl = AutomationElement.FromHandle(searchHwnd);
+            if (rootEl == null)
                 return null;
 
             var condition = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button);
-            AutomationElementCollection buttons = trayEl.FindAll(TreeScope.Descendants, condition);
+
+            // Fetch AutomationId & BoundingRectangle in a single cross-process batch with AutomationElementMode.None
+            // so UIAutomationCore does not retain live COM proxies for every taskbar button.
+            var cacheRequest = new CacheRequest
+            {
+                AutomationElementMode = AutomationElementMode.None,
+                TreeScope = TreeScope.Element
+            };
+            cacheRequest.Add(AutomationElement.AutomationIdProperty);
+            cacheRequest.Add(AutomationElement.BoundingRectangleProperty);
+
+            AutomationElementCollection buttons;
+            using (cacheRequest.Activate())
+            {
+                buttons = rootEl.FindAll(TreeScope.Descendants, condition);
+                if ((buttons == null || buttons.Count == 0) && searchHwnd != trayHwnd)
+                {
+                    AutomationElement fallbackEl = AutomationElement.FromHandle(trayHwnd);
+                    buttons = fallbackEl?.FindAll(TreeScope.Descendants, condition);
+                }
+            }
+
             if (buttons == null || buttons.Count == 0)
                 return null;
 
@@ -768,7 +813,7 @@ namespace WinBins.Services
                 try
                 {
                     AutomationElement btn = buttons[i];
-                    string autoId = btn.Current.AutomationId ?? string.Empty;
+                    string autoId = btn.Cached.AutomationId ?? string.Empty;
                     if (string.IsNullOrEmpty(autoId))
                         continue;
 
@@ -777,7 +822,7 @@ namespace WinBins.Services
                         if (!matchedSet.Contains(binId) &&
                             autoId.IndexOf(binId, StringComparison.OrdinalIgnoreCase) >= 0)
                         {
-                            System.Windows.Rect rect = btn.Current.BoundingRectangle;
+                            System.Windows.Rect rect = btn.Cached.BoundingRectangle;
                             if (!rect.IsEmpty && !double.IsInfinity(rect.Left) && !double.IsNaN(rect.Left))
                             {
                                 matchedSet.Add(binId);
@@ -981,11 +1026,15 @@ namespace WinBins.Services
 
         public void Dispose()
         {
-            _orderPollTimer.Stop();
             _pinSyncDebounceTimer.Stop();
             _pinFollowUpTimer.Stop();
             _taskbandStampTimer.Stop();
             _hoverMonitorTimer.Stop();
+
+            if (_displaySettingsChangedHandler != null)
+            {
+                try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= _displaySettingsChangedHandler; } catch { }
+            }
 
             CaptureTaskbarOrderSync();
 

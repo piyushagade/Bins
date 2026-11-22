@@ -97,6 +97,7 @@ namespace WinBins.Services
         private DispatcherTimer _switcherEndTimer;
         private bool _switcherRestoreActive;
         private int _switcherLastActivityTick;
+        private IntPtr _lastNotifiedFgHwnd = IntPtr.Zero;
         private bool _disposed;
 
         public event Action RunningStateChanged;
@@ -128,7 +129,7 @@ namespace WinBins.Services
 
             _pollTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
             {
-                Interval = TimeSpan.FromMilliseconds(1500)
+                Interval = TimeSpan.FromMilliseconds(3000)
             };
             _pollTimer.Tick += (_, __) => SyncRunningWindows();
             _pollTimer.Start();
@@ -512,9 +513,16 @@ namespace WinBins.Services
                     hideExplorerWindows;
                 EnsureKeyboardHookState(hasAnyActiveTargets);
 
+                IntPtr currentFg = Win32Interop.GetForegroundWindow();
+                bool fgChanged = currentFg != _lastNotifiedFgHwnd;
+
                 if (!hasAnyActiveTargets && _hiddenHwnds.Count == 0)
                 {
-                    RunningStateChanged?.Invoke();
+                    if (fgChanged || forceReassert)
+                    {
+                        _lastNotifiedFgHwnd = currentFg;
+                        RunningStateChanged?.Invoke();
+                    }
                     return;
                 }
 
@@ -527,7 +535,7 @@ namespace WinBins.Services
                         _switcherEndTimer.Stop();
                     }
                     else if (IsAltOrWinKeyDown() ||
-                             IsTaskSwitcherWindow(Win32Interop.GetForegroundWindow()) ||
+                             IsTaskSwitcherWindow(currentFg) ||
                              Math.Abs(Environment.TickCount - _switcherLastActivityTick) < 260)
                     {
                         return;
@@ -542,8 +550,11 @@ namespace WinBins.Services
                 if (!EnsureTaskbarListReady(out bool explorerRestarted))
                     return;
 
+                bool hiddenSetChanged = false;
                 if (explorerRestarted)
                 {
+                    if (_hiddenHwnds.Count > 0)
+                        hiddenSetChanged = true;
                     _hiddenHwnds.Clear();
                 }
 
@@ -558,6 +569,7 @@ namespace WinBins.Services
                         if (!Win32Interop.IsWindow(hwnd) || !Win32Interop.IsWindowVisible(hwnd))
                         {
                             _hiddenHwnds.Remove(hwnd);
+                            hiddenSetChanged = true;
                             continue;
                         }
 
@@ -582,13 +594,18 @@ namespace WinBins.Services
                                 try { _taskbarList.AddTab(hwnd); } catch { }
                             }
                             _hiddenHwnds.Remove(hwnd);
+                            hiddenSetChanged = true;
                         }
                     }
                 }
 
                 if (!hasAnyActiveTargets)
                 {
-                    RunningStateChanged?.Invoke();
+                    if (fgChanged || hiddenSetChanged || forceReassert)
+                    {
+                        _lastNotifiedFgHwnd = currentFg;
+                        RunningStateChanged?.Invoke();
+                    }
                     return;
                 }
 
@@ -609,7 +626,8 @@ namespace WinBins.Services
                             {
                                 if (_taskbarList.DeleteTab(hwnd) == 0)
                                 {
-                                    _hiddenHwnds.Add(hwnd);
+                                    if (_hiddenHwnds.Add(hwnd))
+                                        hiddenSetChanged = true;
                                 }
                             }
                             catch
@@ -621,7 +639,11 @@ namespace WinBins.Services
                     return true;
                 }, IntPtr.Zero);
 
-                RunningStateChanged?.Invoke();
+                if (fgChanged || hiddenSetChanged || forceReassert)
+                {
+                    _lastNotifiedFgHwnd = currentFg;
+                    RunningStateChanged?.Invoke();
+                }
             }
             catch
             {
@@ -771,6 +793,126 @@ namespace WinBins.Services
             }
 
             return summaries;
+        }
+
+        /// <summary>
+        /// Single-pass EnumWindows lookup returning open apps grouped by BinId for all provided Bins at once.
+        /// </summary>
+        public Dictionary<string, List<BinRunningAppSummary>> GetRunningAppsForBins(IList<BinGroup> bins)
+        {
+            var result = new Dictionary<string, List<BinRunningAppSummary>>(StringComparer.OrdinalIgnoreCase);
+            if (_disposed || bins == null || bins.Count == 0)
+                return result;
+
+            var candidates = new List<Tuple<string, BinItem, HashSet<string>, HashSet<string>, List<string>, bool, List<RunningWindowEntry>>>();
+
+            for (int b = 0; b < bins.Count; b++)
+            {
+                BinGroup bin = bins[b];
+                if (bin == null || string.IsNullOrWhiteSpace(bin.Id) || bin.Items == null || bin.Items.Count == 0)
+                    continue;
+
+                for (int i = 0; i < bin.Items.Count; i++)
+                {
+                    BinItem item = bin.Items[i];
+                    if (item == null)
+                        continue;
+
+                    ResolvedTargetExe resolved = ResolveItemExecutableTarget(item);
+                    if (resolved == null)
+                        continue;
+
+                    var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var pkgPrefixes = new List<string>();
+
+                    if (!resolved.IsExplorerExe)
+                    {
+                        if (!string.IsNullOrWhiteSpace(resolved.FullExePath))
+                            paths.Add(resolved.FullExePath);
+                        if (!string.IsNullOrWhiteSpace(resolved.ExeFileName) && !GenericHostExeNames.Contains(resolved.ExeFileName))
+                            names.Add(resolved.ExeFileName);
+                        if (!string.IsNullOrWhiteSpace(resolved.PackagePrefix))
+                            pkgPrefixes.Add(resolved.PackagePrefix);
+                    }
+
+                    if (!resolved.IsExplorerExe && paths.Count == 0 && names.Count == 0 && pkgPrefixes.Count == 0)
+                        continue;
+
+                    candidates.Add(Tuple.Create(bin.Id, item, paths, names, pkgPrefixes, resolved.IsExplorerExe, new List<RunningWindowEntry>()));
+                }
+            }
+
+            if (candidates.Count == 0)
+                return result;
+
+            IntPtr fgHwnd = Win32Interop.GetForegroundWindow();
+            var pidExeCache = new Dictionary<uint, string>();
+
+            try
+            {
+                Win32Interop.EnumWindows((hwnd, lParam) =>
+                {
+                    if (!IsTaskbarEligibleAppWindow(hwnd, _currentPid, out uint pid, out string className))
+                        return true;
+
+                    if (!TryGetWindowProcessExe(hwnd, pid, pidExeCache, out string exePath))
+                        return true;
+
+                    string title = null;
+                    bool isMin = false;
+                    bool computedMeta = false;
+
+                    for (int i = 0; i < candidates.Count; i++)
+                    {
+                        var c = candidates[i];
+                        if (DoesProcessMatchTargets(exePath, className, c.Item3, c.Item4, c.Item5, c.Item6))
+                        {
+                            if (!computedMeta)
+                            {
+                                title = Win32Interop.GetWindowTextSafe(hwnd);
+                                isMin = Win32Interop.IsIconic(hwnd);
+                                computedMeta = true;
+                            }
+
+                            c.Item7.Add(new RunningWindowEntry
+                            {
+                                Hwnd = hwnd,
+                                Title = string.IsNullOrWhiteSpace(title) ? c.Item2.Name : title,
+                                IsForeground = hwnd == fgHwnd,
+                                IsMinimized = isMin
+                            });
+                        }
+                    }
+
+                    return true;
+                }, IntPtr.Zero);
+            }
+            catch
+            {
+            }
+
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                var c = candidates[i];
+                if (c.Item7.Count > 0)
+                {
+                    if (!result.TryGetValue(c.Item1, out List<BinRunningAppSummary> list))
+                    {
+                        list = new List<BinRunningAppSummary>();
+                        result[c.Item1] = list;
+                    }
+
+                    list.Add(new BinRunningAppSummary
+                    {
+                        Item = c.Item2,
+                        Windows = c.Item7,
+                        IsForeground = c.Item7.Any(w => w.IsForeground && !w.IsMinimized)
+                    });
+                }
+            }
+
+            return result;
         }
 
         /// <summary>

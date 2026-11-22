@@ -46,6 +46,26 @@ namespace WinBins.Services
 
         private const string TaskbandRegistryPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband";
 
+        private sealed class PinnedShortcutRecord
+        {
+            public string LnkPath;
+            public string Arguments;
+            public string Aumid;
+        }
+
+        private static readonly object PinnedCacheLock = new object();
+        private static long _cachedPinnedStamp = long.MinValue;
+        private static List<PinnedShortcutRecord> _cachedPinnedWinBinsShortcuts;
+
+        public static void InvalidatePinnedCache()
+        {
+            lock (PinnedCacheLock)
+            {
+                _cachedPinnedStamp = long.MinValue;
+                _cachedPinnedWinBinsShortcuts = null;
+            }
+        }
+
         public static string GetUserPinnedTaskbarFolder()
         {
             return Path.Combine(
@@ -82,10 +102,13 @@ namespace WinBins.Services
 
                     int favChanges = Convert.ToInt32(key.GetValue("FavoritesChanges", 0));
                     int removedChanges = Convert.ToInt32(key.GetValue("FavoritesRemovedChanges", 0));
-                    byte[] favBytes = key.GetValue("Favorites") as byte[];
-                    int byteLen = favBytes?.Length ?? 0;
+                    if (favChanges == 0 && removedChanges == 0)
+                    {
+                        byte[] favBytes = key.GetValue("Favorites") as byte[];
+                        return favBytes?.Length ?? 0;
+                    }
 
-                    return ((long)(uint)favChanges << 32) ^ ((long)(uint)removedChanges << 16) ^ (uint)byteLen;
+                    return ((long)(uint)favChanges << 32) ^ (uint)removedChanges;
                 }
             }
             catch
@@ -185,13 +208,103 @@ namespace WinBins.Services
             return false;
         }
 
-        public static List<Tuple<string, string>> FindAllActivePinnedShortcuts(string binId)
+        private static bool ContainsDecodedIgnoreCase(string ascii, string utf16Even, string utf16Odd, string token)
         {
-            var results = new List<Tuple<string, string>>();
-            if (string.IsNullOrWhiteSpace(binId))
-                return results;
+            if (string.IsNullOrEmpty(token))
+                return false;
+            if (!string.IsNullOrEmpty(ascii) && ascii.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (!string.IsNullOrEmpty(utf16Even) && utf16Even.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (!string.IsNullOrEmpty(utf16Odd) && utf16Odd.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            return false;
+        }
 
+        private static bool TryReadWinBinsShortcutMetadata(string lnkPath, out string arguments, out string aumid)
+        {
+            arguments = null;
+            aumid = null;
+            var link = (IShellLinkW)new ShellLinkCoClass();
+            try
+            {
+                ((IPersistFile)link).Load(lnkPath, 0); // STGM_READ
+
+                var argsSb = new StringBuilder(512);
+                link.GetArguments(argsSb, argsSb.Capacity);
+                string args = argsSb.ToString() ?? string.Empty;
+
+                string readAumid = null;
+                if (link is Win32Interop.IPropertyStore propStore)
+                {
+                    var key = Win32Interop.PKEY_AppUserModel_ID;
+                    if (propStore.GetValue(ref key, out Win32Interop.PropVariant pv) == 0)
+                    {
+                        try
+                        {
+                            readAumid = pv.AsString();
+                        }
+                        finally
+                        {
+                            pv.Dispose();
+                        }
+                    }
+                }
+
+                bool isWinBins =
+                    args.IndexOf("--bin", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    (!string.IsNullOrWhiteSpace(readAumid) &&
+                     readAumid.StartsWith("WinBins.", StringComparison.OrdinalIgnoreCase));
+
+                if (isWinBins)
+                {
+                    arguments = args;
+                    aumid = readAumid;
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(link);
+            }
+
+            return false;
+        }
+
+        private static List<PinnedShortcutRecord> GetCachedActiveWinBinsShortcuts()
+        {
+            long currentStamp = GetTaskbandPinStamp();
+            lock (PinnedCacheLock)
+            {
+                if (_cachedPinnedWinBinsShortcuts != null && _cachedPinnedStamp == currentStamp)
+                {
+                    return _cachedPinnedWinBinsShortcuts;
+                }
+            }
+
+            var scanned = new List<PinnedShortcutRecord>();
             byte[] favoritesBytes = ReadTaskbandFavoritesBytes();
+
+            string favAscii = null;
+            string favUtf16Even = null;
+            string favUtf16Odd = null;
+            bool hasFavBlob = favoritesBytes != null && favoritesBytes.Length > 0;
+            if (hasFavBlob)
+            {
+                favAscii = Encoding.ASCII.GetString(favoritesBytes);
+                int evenLen = favoritesBytes.Length - (favoritesBytes.Length % 2);
+                if (evenLen >= 2)
+                    favUtf16Even = Encoding.Unicode.GetString(favoritesBytes, 0, evenLen);
+                if (favoritesBytes.Length >= 3)
+                {
+                    int oddLen = (favoritesBytes.Length - 1) - ((favoritesBytes.Length - 1) % 2);
+                    if (oddLen >= 2)
+                        favUtf16Odd = Encoding.Unicode.GetString(favoritesBytes, 1, oddLen);
+                }
+            }
 
             // 1. Direct pinned shortcuts under User Pinned\TaskBar\
             try
@@ -201,18 +314,21 @@ namespace WinBins.Services
                 {
                     foreach (string file in Directory.GetFiles(pinnedDir, "*.lnk"))
                     {
-                        if (InspectShortcutForBin(file, binId, out string foundAumid))
+                        if (TryReadWinBinsShortcutMetadata(file, out string args, out string foundAumid))
                         {
                             bool activeInFavorites =
-                                favoritesBytes == null ||
-                                favoritesBytes.Length == 0 ||
-                                ContainsAsciiOrUtf16IgnoreCase(favoritesBytes, Path.GetFileName(file)) ||
-                                (!string.IsNullOrWhiteSpace(foundAumid) && ContainsAsciiOrUtf16IgnoreCase(favoritesBytes, foundAumid)) ||
-                                ContainsAsciiOrUtf16IgnoreCase(favoritesBytes, binId);
+                                !hasFavBlob ||
+                                ContainsDecodedIgnoreCase(favAscii, favUtf16Even, favUtf16Odd, Path.GetFileName(file)) ||
+                                (!string.IsNullOrWhiteSpace(foundAumid) && ContainsDecodedIgnoreCase(favAscii, favUtf16Even, favUtf16Odd, foundAumid));
 
                             if (activeInFavorites)
                             {
-                                results.Add(Tuple.Create(file, foundAumid));
+                                scanned.Add(new PinnedShortcutRecord
+                                {
+                                    LnkPath = file,
+                                    Arguments = args,
+                                    Aumid = foundAumid
+                                });
                             }
                         }
                     }
@@ -223,26 +339,30 @@ namespace WinBins.Services
             }
 
             // 2. Windows 11 custom-AUMID pinned shortcuts under User Pinned\ImplicitAppShortcuts\<hash>\
-            // Explorer stores the <hash> folder in Taskband\Favorites while pinned and leaves stale folders on disk when unpinned.
             try
             {
                 string implicitDir = GetImplicitAppShortcutsFolder();
-                if (Directory.Exists(implicitDir) && favoritesBytes != null && favoritesBytes.Length > 0)
+                if (Directory.Exists(implicitDir) && hasFavBlob)
                 {
                     foreach (string subDir in Directory.GetDirectories(implicitDir))
                     {
                         string hashFolder = Path.GetFileName(subDir);
                         if (string.IsNullOrWhiteSpace(hashFolder) ||
-                            !ContainsAsciiOrUtf16IgnoreCase(favoritesBytes, hashFolder))
+                            !ContainsDecodedIgnoreCase(favAscii, favUtf16Even, favUtf16Odd, hashFolder))
                         {
                             continue;
                         }
 
                         foreach (string file in Directory.GetFiles(subDir, "*.lnk"))
                         {
-                            if (InspectShortcutForBin(file, binId, out string foundAumid))
+                            if (TryReadWinBinsShortcutMetadata(file, out string args, out string foundAumid))
                             {
-                                results.Add(Tuple.Create(file, foundAumid));
+                                scanned.Add(new PinnedShortcutRecord
+                                {
+                                    LnkPath = file,
+                                    Arguments = args,
+                                    Aumid = foundAumid
+                                });
                             }
                         }
                     }
@@ -250,6 +370,41 @@ namespace WinBins.Services
             }
             catch
             {
+            }
+
+            lock (PinnedCacheLock)
+            {
+                _cachedPinnedStamp = currentStamp;
+                _cachedPinnedWinBinsShortcuts = scanned;
+            }
+
+            return scanned;
+        }
+
+        public static List<Tuple<string, string>> FindAllActivePinnedShortcuts(string binId)
+        {
+            var results = new List<Tuple<string, string>>();
+            if (string.IsNullOrWhiteSpace(binId))
+                return results;
+
+            List<PinnedShortcutRecord> cached = GetCachedActiveWinBinsShortcuts();
+            string quotedArg = $"--bin \"{binId}\"";
+            string plainArg = $"--bin {binId}";
+
+            for (int i = 0; i < cached.Count; i++)
+            {
+                PinnedShortcutRecord rec = cached[i];
+                bool argsMatch = !string.IsNullOrEmpty(rec.Arguments) &&
+                                 (rec.Arguments.IndexOf(quotedArg, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                  rec.Arguments.IndexOf(plainArg, StringComparison.OrdinalIgnoreCase) >= 0);
+                bool aumidMatch = !string.IsNullOrWhiteSpace(rec.Aumid) &&
+                                  rec.Aumid.IndexOf(binId, StringComparison.OrdinalIgnoreCase) >= 0 &&
+                                  rec.Aumid.StartsWith("WinBins.", StringComparison.OrdinalIgnoreCase);
+
+                if (argsMatch || aumidMatch)
+                {
+                    results.Add(Tuple.Create(rec.LnkPath, rec.Aumid));
+                }
             }
 
             return results;

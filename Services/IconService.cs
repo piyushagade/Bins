@@ -181,54 +181,92 @@ namespace WinBins.Services
             return rawPath;
         }
 
-        public Bitmap GetItemBitmap(BinItem item)
+        private const int MaxWpfImageCacheEntries = 256;
+
+        private Bitmap ExtractItemBitmapUncached(string sourcePath, int resourceIndex)
         {
-            ResolveItemIconKey(item, out string sourcePath, out int resourceIndex, out string cacheKey);
             if (string.IsNullOrWhiteSpace(sourcePath))
                 return CreateFallbackItemBitmap();
 
-            return _bitmapCache.GetOrAdd(cacheKey, _ =>
+            if (sourcePath.StartsWith("__fluent_sys__|", StringComparison.Ordinal))
             {
-                if (sourcePath.StartsWith("__fluent_sys__|", StringComparison.Ordinal))
-                {
-                    string sysAction = sourcePath.Substring("__fluent_sys__|".Length);
-                    return CreateSystemActionBitmap(sysAction);
-                }
+                string sysAction = sourcePath.Substring("__fluent_sys__|".Length);
+                return CreateSystemActionBitmap(sysAction);
+            }
 
-                if (sourcePath.StartsWith("__subbin__|", StringComparison.Ordinal))
+            if (sourcePath.StartsWith("__subbin__|", StringComparison.Ordinal))
+            {
+                string subBinId = sourcePath.Substring("__subbin__|".Length);
+                BinGroup targetBin = _configService?.Current?.Bins?.Find(b => string.Equals(b.Id, subBinId, StringComparison.OrdinalIgnoreCase));
+                if (targetBin != null)
                 {
-                    string subBinId = sourcePath.Substring("__subbin__|".Length);
-                    BinGroup targetBin = _configService?.Current?.Bins?.Find(b => string.Equals(b.Id, subBinId, StringComparison.OrdinalIgnoreCase));
-                    if (targetBin != null)
-                    {
-                        return CreateBinBitmap(targetBin, allowSubBinRecursion: false);
-                    }
-                    return CreateSystemActionBitmap("subbin");
+                    return CreateBinBitmap(targetBin, allowSubBinRecursion: false);
                 }
+                return CreateSystemActionBitmap("subbin");
+            }
 
-                Bitmap extracted = Win32Interop.ExtractHighResIconBitmap(sourcePath, resourceIndex, 256);
-                return extracted ?? CreateFallbackItemBitmap();
-            });
+            Bitmap extracted = Win32Interop.ExtractHighResIconBitmap(sourcePath, resourceIndex, 128);
+            return extracted ?? CreateFallbackItemBitmap();
+        }
+
+        public Bitmap GetItemBitmap(BinItem item)
+        {
+            ResolveItemIconKey(item, out string sourcePath, out int resourceIndex, out string cacheKey);
+            return _bitmapCache.GetOrAdd(cacheKey, _ => ExtractItemBitmapUncached(sourcePath, resourceIndex));
         }
 
         public BitmapSource GetItemImageSource(BinItem item)
         {
-            ResolveItemIconKey(item, out _, out _, out string cacheKey);
+            ResolveItemIconKey(item, out string sourcePath, out int resourceIndex, out string cacheKey);
+            if (_wpfImageCache.Count > MaxWpfImageCacheEntries)
+            {
+                _wpfImageCache.Clear();
+            }
+
             return _wpfImageCache.GetOrAdd(cacheKey, _ =>
             {
-                Bitmap bmp = GetItemBitmap(item);
-                return ConvertBitmapToBitmapSource(bmp);
+                if (_bitmapCache.TryGetValue(cacheKey, out Bitmap cachedBmp) && cachedBmp != null)
+                {
+                    return ConvertBitmapToBitmapSource(cachedBmp);
+                }
+
+                using (Bitmap tempBmp = ExtractItemBitmapUncached(sourcePath, resourceIndex))
+                {
+                    return ConvertBitmapToBitmapSource(tempBmp);
+                }
             });
         }
 
         public BitmapSource GetPathImageSource(string path, int resourceIndex = 0)
         {
             string cacheKey = $"{path}|{resourceIndex}";
+            if (_wpfImageCache.Count > MaxWpfImageCacheEntries)
+            {
+                _wpfImageCache.Clear();
+            }
+
             return _wpfImageCache.GetOrAdd(cacheKey, _ =>
             {
-                Bitmap bmp = Win32Interop.ExtractHighResIconBitmap(path, resourceIndex, 128) ?? CreateFallbackItemBitmap();
-                return ConvertBitmapToBitmapSource(bmp);
+                using (Bitmap bmp = Win32Interop.ExtractHighResIconBitmap(path, resourceIndex, 128) ?? CreateFallbackItemBitmap())
+                {
+                    return ConvertBitmapToBitmapSource(bmp);
+                }
             });
+        }
+
+        /// <summary>
+        /// Releases cached GDI+ System.Drawing.Bitmap instances (used transiently for mosaic/.ico generation)
+        /// while keeping frozen WPF BitmapSources for instant flyout rendering.
+        /// </summary>
+        public void TrimGdiBitmapCache()
+        {
+            foreach (string key in _bitmapCache.Keys)
+            {
+                if (_bitmapCache.TryRemove(key, out Bitmap bmp))
+                {
+                    try { bmp?.Dispose(); } catch { }
+                }
+            }
         }
 
         public static System.Drawing.Color? TryParseDrawingColor(string hex)
@@ -718,13 +756,13 @@ namespace WinBins.Services
             {
                 case "snip":
                 {
-                    Bitmap pkg = Win32Interop.ExtractHighResIconBitmap(@"shell:AppsFolder\Microsoft.ScreenSketch_8wekyb3d8bbwe!App", 0, 256);
+                    Bitmap pkg = Win32Interop.ExtractHighResIconBitmap(@"shell:AppsFolder\Microsoft.ScreenSketch_8wekyb3d8bbwe!App", 0, 128);
                     if (pkg != null) return pkg;
                     return CreateFluentGlyphTileBitmap("\uE7A6", System.Drawing.Color.FromArgb(245, 14, 165, 233), System.Drawing.Color.FromArgb(245, 2, 132, 199));
                 }
                 case "settings":
                 {
-                    Bitmap pkg = Win32Interop.ExtractHighResIconBitmap(@"shell:AppsFolder\windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel", 0, 256);
+                    Bitmap pkg = Win32Interop.ExtractHighResIconBitmap(@"shell:AppsFolder\windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel", 0, 128);
                     if (pkg != null) return pkg;
                     return CreateFluentGlyphTileBitmap("\uE713", System.Drawing.Color.FromArgb(245, 59, 130, 246), System.Drawing.Color.FromArgb(245, 37, 99, 235));
                 }

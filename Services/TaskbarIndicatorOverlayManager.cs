@@ -63,7 +63,7 @@ namespace WinBins.Services
             // Lightweight check for fullscreen video/games, auto-hide taskbar animation, and foreground changes
             _fastWatchTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
             {
-                Interval = TimeSpan.FromMilliseconds(450)
+                Interval = TimeSpan.FromMilliseconds(1500)
             };
             _fastWatchTimer.Tick += (_, __) => SyncIndicators();
             _fastWatchTimer.Start();
@@ -73,13 +73,6 @@ namespace WinBins.Services
         {
             if (_disposed)
                 return;
-
-            int now = Environment.TickCount;
-            if (Math.Abs(now - _lastRectRequestTick) > 900)
-            {
-                _lastRectRequestTick = now;
-                _taskbarManager.RequestButtonRectRefresh();
-            }
 
             SyncIndicators();
         }
@@ -135,8 +128,7 @@ namespace WinBins.Services
                     return;
                 }
 
-                var activeIdsWithOpenApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
+                var eligibleBins = new List<BinGroup>();
                 foreach (BinGroup bin in bins)
                 {
                     if (bin == null || string.IsNullOrWhiteSpace(bin.Id))
@@ -151,19 +143,43 @@ namespace WinBins.Services
                     if (!isPinned && !bin.HideRunningAppsOnTaskbar)
                         continue;
 
-                    List<BinRunningAppSummary> running = _runningAppsManager.GetRunningAppsForBin(bin);
-                    if (running.Count == 0)
+                    eligibleBins.Add(bin);
+                }
+
+                if (eligibleBins.Count == 0)
+                {
+                    DestroyAllOverlays();
+                    return;
+                }
+
+                var runningByBin = _runningAppsManager.GetRunningAppsForBins(eligibleBins);
+                var activeIdsWithOpenApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                bool needRectRefresh = false;
+
+                foreach (BinGroup bin in eligibleBins)
+                {
+                    if (!runningByBin.TryGetValue(bin.Id, out List<BinRunningAppSummary> running) || running.Count == 0)
                         continue;
 
                     if (!_taskbarManager.TryGetBinTaskbarRect(bin.Id, out System.Windows.Rect btnRect) ||
                         btnRect.Width < 16 || btnRect.Height < 16)
                     {
-                        _taskbarManager.RequestButtonRectRefresh();
+                        needRectRefresh = true;
                         continue;
                     }
 
                     activeIdsWithOpenApps.Add(bin.Id);
                     UpdateBinOverlay(bin, running, btnRect);
+                }
+
+                if (needRectRefresh)
+                {
+                    int now = Environment.TickCount;
+                    if (Math.Abs(now - _lastRectRequestTick) > 10000)
+                    {
+                        _lastRectRequestTick = now;
+                        _taskbarManager.RequestButtonRectRefresh();
+                    }
                 }
 
                 // Hide or clean up overlays for Bins that no longer have open apps

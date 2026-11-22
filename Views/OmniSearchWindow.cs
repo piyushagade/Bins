@@ -37,6 +37,7 @@ namespace WinBins.Views
         private readonly ScrollViewer _resultsScroll;
         private readonly TextBlock _emptyStateText;
 
+        private readonly Action _themeChangedHandler;
         private readonly List<SearchEntry> _currentEntries = new List<SearchEntry>();
         private int _selectedIndex = 0;
         private bool _suppressTextChanged;
@@ -80,7 +81,7 @@ namespace WinBins.Views
                 ApplyDwmBackdrop(hwnd);
             };
 
-            FluentTheme.ThemeChanged += () =>
+            _themeChangedHandler = () =>
             {
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
@@ -91,6 +92,8 @@ namespace WinBins.Views
                     }
                 }));
             };
+            FluentTheme.ThemeChanged += _themeChangedHandler;
+            Closed += (_, __) => FluentTheme.ThemeChanged -= _themeChangedHandler;
 
             Deactivated += (_, __) => HideSearch();
             PreviewKeyDown += OnWindowPreviewKeyDown;
@@ -282,6 +285,8 @@ namespace WinBins.Views
             {
                 Hide();
             }
+            _resultsPanel.Children.Clear();
+            _currentEntries.Clear();
         }
 
         public void RebuildResults(string rawQuery)

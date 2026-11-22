@@ -70,6 +70,7 @@ namespace WinBins.Views
         private string _activeSectionTab = null; // null = All
         private readonly List<string> _availableTabs = new List<string>();
         private int _selectedTileIndex = -1;
+        private readonly Action _themeChangedHandler;
         private readonly List<TileEntry> _displayedTiles = new List<TileEntry>();
 
         // Toggle-guard state so clicking the same taskbar icon while open closes cleanly instead of reopening
@@ -131,7 +132,7 @@ namespace WinBins.Views
                 Win32Interop.DwmSetWindowAttribute(hwnd, Win32Interop.DWMWA_EXCLUDED_FROM_PEEK, ref one, sizeof(int));
             };
 
-            FluentTheme.ThemeChanged += () =>
+            _themeChangedHandler = () =>
             {
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
@@ -146,6 +147,8 @@ namespace WinBins.Views
                     }
                 }));
             };
+            FluentTheme.ThemeChanged += _themeChangedHandler;
+            Closed += (_, __) => FluentTheme.ThemeChanged -= _themeChangedHandler;
 
             _hoverDismissTimer = new DispatcherTimer(DispatcherPriority.Input)
             {
@@ -611,6 +614,11 @@ namespace WinBins.Views
             {
                 Hide();
             }
+            _itemsGrid.Children.Clear();
+            _contentHostStack.Children.Clear();
+            _displayedTiles.Clear();
+            if (_flyoutHeaderIcon != null)
+                _flyoutHeaderIcon.Source = null;
         }
 
         private void ShowDropHint(string message, bool highlightOuterBorder)

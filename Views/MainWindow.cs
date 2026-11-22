@@ -30,7 +30,9 @@ namespace WinBins.Views
         private readonly BinPopupWindow _popupWindow;
         private readonly RunningAppsTaskbarManager _runningAppsManager;
         private readonly GlobalHotkeyManager _hotkeyManager;
-        private readonly OmniSearchWindow _omniSearchWindow;
+        private readonly Action _onOpenSearch;
+        private readonly Action _themeChangedHandler;
+        private bool _isClosed;
 
         private enum WorkspacePane
         {
@@ -182,7 +184,7 @@ namespace WinBins.Views
             BinPopupWindow popupWindow,
             RunningAppsTaskbarManager runningAppsManager = null,
             GlobalHotkeyManager hotkeyManager = null,
-            OmniSearchWindow omniSearchWindow = null)
+            Action onOpenSearch = null)
         {
             _configService = configService;
             _iconService = iconService;
@@ -191,7 +193,7 @@ namespace WinBins.Views
             _runningAppsManager = runningAppsManager;
             FluentTheme.ApplyGlobalResources(Resources);
             _hotkeyManager = hotkeyManager;
-            _omniSearchWindow = omniSearchWindow;
+            _onOpenSearch = onOpenSearch;
 
             Title = "Bins";
             using (var appBmp = Win32Interop.CreateGroupMosaicBitmap(null))
@@ -219,10 +221,16 @@ namespace WinBins.Views
                     forceDarkMode: !FluentTheme.IsLightThemeActive);
             };
 
-            FluentTheme.ThemeChanged += () =>
+            _themeChangedHandler = () =>
             {
+                if (_isClosed)
+                    return;
+
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
+                    if (_isClosed)
+                        return;
+
                     IntPtr hwnd = new WindowInteropHelper(this).Handle;
                     if (hwnd != IntPtr.Zero)
                     {
@@ -235,6 +243,7 @@ namespace WinBins.Views
                     RefreshFullUi();
                 }));
             };
+            FluentTheme.ThemeChanged += _themeChangedHandler;
 
             BuildLayout();
 
@@ -245,6 +254,7 @@ namespace WinBins.Views
             DragLeave += (_, __) => _dropHighlightOverlay.Visibility = Visibility.Collapsed;
             Drop += MainWindow_Drop;
             Closing += MainWindow_Closing;
+            Closed += MainWindow_Closed;
             PreviewKeyDown += MainWindow_PreviewKeyDown;
         }
 
@@ -329,7 +339,7 @@ namespace WinBins.Views
                 (e.Key == Key.K || e.Key == Key.F) &&
                 !(Keyboard.FocusedElement is TextBox))
             {
-                _omniSearchWindow?.ShowSearch();
+                _onOpenSearch?.Invoke();
                 e.Handled = true;
                 return;
             }
@@ -546,7 +556,7 @@ namespace WinBins.Views
 
             var searchAllBtn = FluentTheme.CreateIconButton("\uE721", "Search all Bins (Ctrl+K)", size: 28, iconSize: 12);
             searchAllBtn.Margin = new Thickness(0, 0, 2, 0);
-            searchAllBtn.Click += (_, __) => _omniSearchWindow?.ShowSearch();
+            searchAllBtn.Click += (_, __) => _onOpenSearch?.Invoke();
             navHeaderActions.Children.Add(searchAllBtn);
 
             var newBinIconBtn = FluentTheme.CreateButton("New", isSubtle: true, padding: new Thickness(8, 4, 9, 4), iconGlyph: "\uE710");
@@ -1888,7 +1898,7 @@ namespace WinBins.Views
             var searchControls = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             var openOmniBtn = FluentTheme.CreateButton("Search now", padding: new Thickness(10, 5, 11, 5), iconGlyph: "\uE721");
             openOmniBtn.Margin = new Thickness(0, 0, 8, 0);
-            openOmniBtn.Click += (_, __) => _omniSearchWindow?.ShowSearch();
+            openOmniBtn.Click += (_, __) => _onOpenSearch?.Invoke();
             searchControls.Children.Add(openOmniBtn);
 
             _globalSearchHotkeyLabel = new TextBlock
@@ -5715,12 +5725,23 @@ namespace WinBins.Views
                 try { _activePinGuideDialog.Close(); } catch { }
                 _activePinGuideDialog = null;
             }
+        }
 
-            if (!AllowRealClose && (_configService.Current?.MinimizeToTrayOnClose ?? true))
-            {
-                e.Cancel = true;
-                Hide();
-            }
+        private void MainWindow_Closed(object sender, EventArgs e)
+        {
+            _isClosed = true;
+            FluentTheme.ThemeChanged -= _themeChangedHandler;
+            _binsListPanel?.Children.Clear();
+            _itemsListPanel?.Children.Clear();
+            _profilesWrapPanel?.Children.Clear();
+            _accentSwatchItems.Clear();
+            _tileIconSizeButtons.Clear();
+            if (_headerBinIcon != null)
+                _headerBinIcon.Source = null;
+            if (_customIconPreviewImg != null)
+                _customIconPreviewImg.Source = null;
+            if (_flyoutIconPreviewImg != null)
+                _flyoutIconPreviewImg.Source = null;
         }
     }
 }

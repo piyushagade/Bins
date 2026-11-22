@@ -187,7 +187,10 @@ namespace WinBins
         private OmniSearchWindow _omniSearchWindow;
         private MainWindow _mainWindow;
         private System.Windows.Forms.NotifyIcon _trayIcon;
+        private Font _trayBoldFont;
         private Icon _trayDrawingIcon;
+        private System.Windows.Threading.DispatcherTimer _memoryTrimTimer;
+        private bool _isShuttingDown;
         private CancellationTokenSource _ipcCts;
 
         public BinsApplication(string initialPayload, bool startInBackground)
@@ -233,12 +236,6 @@ namespace WinBins
             _indicatorOverlayManager = new TaskbarIndicatorOverlayManager(_configService, _taskbarManager, _runningAppsManager, Dispatcher);
             _hotkeyManager = new GlobalHotkeyManager();
 
-            _peekWindow = new BinRunningPeekWindow(
-                _configService,
-                _iconService,
-                _runningAppsManager,
-                _taskbarManager);
-
             _popupWindow = new BinPopupWindow(
                 _configService,
                 _iconService,
@@ -253,21 +250,6 @@ namespace WinBins
                     _mainWindow?.RefreshFullUi();
                     RebuildTrayMenu();
                 });
-
-            _omniSearchWindow = new OmniSearchWindow(
-                _configService,
-                _iconService,
-                _runningAppsManager,
-                onOpenBinEditor: bin => ShowManager(bin));
-
-            _mainWindow = new MainWindow(
-                _configService,
-                _iconService,
-                _taskbarManager,
-                _popupWindow,
-                _runningAppsManager,
-                _hotkeyManager,
-                _omniSearchWindow);
 
             _taskbarManager.BinTaskbarIconClicked += (bin, cursorPt) =>
             {
@@ -285,10 +267,10 @@ namespace WinBins
 
             _taskbarManager.BinTaskbarPeekTriggered += (bin, anchorPt) =>
             {
-                if (_popupWindow.IsVisible || _omniSearchWindow.IsVisible)
+                if (_popupWindow.IsVisible || (_omniSearchWindow != null && _omniSearchWindow.IsVisible))
                     return;
 
-                _peekWindow?.TryShowForBin(bin, anchorPt);
+                EnsurePeekWindow().TryShowForBin(bin, anchorPt);
             };
 
             _hotkeyManager.BinHotkeyPressed += bin =>
@@ -312,7 +294,7 @@ namespace WinBins
                 {
                     _peekWindow?.HidePeek();
                     _popupWindow?.HidePopup();
-                    _omniSearchWindow?.ToggleSearch();
+                    EnsureOmniSearchWindow().ToggleSearch();
                 }));
             };
 
@@ -344,14 +326,106 @@ namespace WinBins
             {
                 ShowManager(null);
             }
+
+            ScheduleMemoryTrim(6000);
+        }
+
+        private BinRunningPeekWindow EnsurePeekWindow()
+        {
+            if (_peekWindow == null)
+            {
+                _peekWindow = new BinRunningPeekWindow(
+                    _configService,
+                    _iconService,
+                    _runningAppsManager,
+                    _taskbarManager);
+            }
+            return _peekWindow;
+        }
+
+        private OmniSearchWindow EnsureOmniSearchWindow()
+        {
+            if (_omniSearchWindow == null)
+            {
+                _omniSearchWindow = new OmniSearchWindow(
+                    _configService,
+                    _iconService,
+                    _runningAppsManager,
+                    onOpenBinEditor: bin => ShowManager(bin));
+            }
+            return _omniSearchWindow;
+        }
+
+        private MainWindow EnsureMainWindow()
+        {
+            if (_mainWindow == null)
+            {
+                var win = new MainWindow(
+                    _configService,
+                    _iconService,
+                    _taskbarManager,
+                    _popupWindow,
+                    _runningAppsManager,
+                    _hotkeyManager,
+                    onOpenSearch: () => EnsureOmniSearchWindow().ShowSearch());
+
+                win.Closed += (_, __) =>
+                {
+                    if (ReferenceEquals(_mainWindow, win))
+                    {
+                        _mainWindow = null;
+                    }
+
+                    if (!_isShuttingDown && !win.AllowRealClose && !(_configService.Current?.MinimizeToTrayOnClose ?? true))
+                    {
+                        ExitCleanly();
+                        return;
+                    }
+
+                    ScheduleMemoryTrim(2000);
+                };
+
+                _mainWindow = win;
+            }
+            return _mainWindow;
+        }
+
+        private void ScheduleMemoryTrim(int delayMs)
+        {
+            if (_isShuttingDown)
+                return;
+
+            if (_memoryTrimTimer == null)
+            {
+                _memoryTrimTimer = new System.Windows.Threading.DispatcherTimer(
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+                    Dispatcher);
+                _memoryTrimTimer.Tick += (_, __) =>
+                {
+                    _memoryTrimTimer.Stop();
+                    if (_isShuttingDown)
+                        return;
+
+                    try
+                    {
+                        _iconService?.TrimGdiBitmapCache();
+                        GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, false);
+                        Win32Interop.TrimProcessWorkingSet();
+                    }
+                    catch
+                    {
+                    }
+                };
+            }
+
+            _memoryTrimTimer.Stop();
+            _memoryTrimTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(500, delayMs));
+            _memoryTrimTimer.Start();
         }
 
         private void ShowManager(BinGroup focusBin)
         {
-            if (_mainWindow == null)
-                return;
-
-            _mainWindow.SelectAndFocusBin(focusBin);
+            EnsureMainWindow().SelectAndFocusBin(focusBin);
             RebuildTrayMenu();
         }
 
@@ -433,13 +507,15 @@ namespace WinBins
             searchTrayItem.Click += (_, __) => Dispatcher.BeginInvoke(new Action(() =>
             {
                 _popupWindow?.HidePopup();
-                _omniSearchWindow?.ShowSearch();
+                EnsureOmniSearchWindow().ShowSearch();
             }));
             menu.Items.Add(searchTrayItem);
 
+            var oldBoldFont = _trayBoldFont;
+            _trayBoldFont = new Font(menu.Font, System.Drawing.FontStyle.Bold);
             var managerItem = new System.Windows.Forms.ToolStripMenuItem("Bins Manager...")
             {
-                Font = new Font(menu.Font, System.Drawing.FontStyle.Bold)
+                Font = _trayBoldFont
             };
             managerItem.Click += (_, __) => Dispatcher.BeginInvoke(new Action(() => ShowManager(null)));
             menu.Items.Add(managerItem);
@@ -450,7 +526,10 @@ namespace WinBins
             exitItem.Click += (_, __) => Dispatcher.BeginInvoke(new Action(ExitCleanly));
             menu.Items.Add(exitItem);
 
+            var oldMenu = _trayIcon.ContextMenuStrip;
             _trayIcon.ContextMenuStrip = menu;
+            oldMenu?.Dispose();
+            oldBoldFont?.Dispose();
         }
 
         private void StartIpcServer()
@@ -549,7 +628,7 @@ namespace WinBins
             if (string.Equals(verb, "OPEN_SEARCH", StringComparison.OrdinalIgnoreCase))
             {
                 _popupWindow?.HidePopup();
-                _omniSearchWindow?.ShowSearch();
+                EnsureOmniSearchWindow().ShowSearch();
                 return;
             }
 
@@ -594,7 +673,7 @@ namespace WinBins
             {
                 _popupWindow?.HidePopup();
                 BinGroup bin = FindBin(parts[1]);
-                _mainWindow?.OpenBinAndPromptAddItem(bin);
+                EnsureMainWindow().OpenBinAndPromptAddItem(bin);
                 RebuildTrayMenu();
                 return;
             }
@@ -603,7 +682,7 @@ namespace WinBins
             {
                 _popupWindow?.HidePopup();
                 BinGroup bin = FindBin(parts[1]);
-                _mainWindow?.OpenBinWithFlyoutOptions(bin);
+                EnsureMainWindow().OpenBinWithFlyoutOptions(bin);
                 RebuildTrayMenu();
                 return;
             }
@@ -619,7 +698,7 @@ namespace WinBins
             if (string.Equals(verb, "NEW_BIN", StringComparison.OrdinalIgnoreCase))
             {
                 _popupWindow?.HidePopup();
-                _mainWindow?.CreateAndFocusNewBin();
+                EnsureMainWindow().CreateAndFocusNewBin();
                 RebuildTrayMenu();
                 return;
             }
@@ -627,7 +706,7 @@ namespace WinBins
             if (string.Equals(verb, "SHOW_SETTINGS", StringComparison.OrdinalIgnoreCase))
             {
                 _popupWindow?.HidePopup();
-                _mainWindow?.OpenSettingsPane();
+                EnsureMainWindow().OpenSettingsPane();
                 RebuildTrayMenu();
                 return;
             }
@@ -672,14 +751,24 @@ namespace WinBins
 
         private void ExitCleanly()
         {
+            if (_isShuttingDown)
+                return;
+            _isShuttingDown = true;
+
+            try { _memoryTrimTimer?.Stop(); } catch { }
             try { _ipcCts?.Cancel(); } catch { }
 
             if (_trayIcon != null)
             {
+                var oldMenu = _trayIcon.ContextMenuStrip;
+                _trayIcon.ContextMenuStrip = null;
+                oldMenu?.Dispose();
                 _trayIcon.Visible = false;
                 _trayIcon.Dispose();
                 _trayIcon = null;
             }
+            _trayBoldFont?.Dispose();
+            _trayBoldFont = null;
             _trayDrawingIcon?.Dispose();
 
             _hotkeyManager?.Dispose();

@@ -36,6 +36,7 @@ namespace WinBins.Views
         private readonly StackPanel _rowsPanel;
         private readonly ScrollViewer _rowsScroll;
 
+        private readonly Action _themeChangedHandler;
         private readonly DispatcherTimer _dismissTimer;
         private readonly List<Tuple<IntPtr, FrameworkElement>> _pendingThumbHosts = new List<Tuple<IntPtr, FrameworkElement>>();
         private readonly List<Tuple<IntPtr, IntPtr, FrameworkElement>> _activeThumbnails = new List<Tuple<IntPtr, IntPtr, FrameworkElement>>();
@@ -90,7 +91,7 @@ namespace WinBins.Views
                 }
             };
 
-            FluentTheme.ThemeChanged += () =>
+            _themeChangedHandler = () =>
             {
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
@@ -105,6 +106,8 @@ namespace WinBins.Views
                     }
                 }));
             };
+            FluentTheme.ThemeChanged += _themeChangedHandler;
+            Closed += (_, __) => FluentTheme.ThemeChanged -= _themeChangedHandler;
 
             _dismissTimer = new DispatcherTimer(DispatcherPriority.Input)
             {
@@ -287,6 +290,8 @@ namespace WinBins.Views
             {
                 Hide();
             }
+            _rowsPanel.Children.Clear();
+            _currentBin = null;
         }
 
         private void ClearActiveThumbnails()
