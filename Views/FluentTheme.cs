@@ -630,11 +630,46 @@ namespace WinBins.Views
         }
 
         /// <summary>
+        /// Utility/launcher TextBox that disables WPF SpellCheck and omits UI Automation Edit/Text patterns
+        /// so background writing-assistant overlays (such as Grammarly's floating widget) do not attach to
+        /// search bars, paths, filters, or rename inputs, while preserving full native keyboard and clipboard behavior.
+        /// </summary>
+        public sealed class FluentTextBox : TextBox
+        {
+            private sealed class NonProseTextBoxAutomationPeer : System.Windows.Automation.Peers.FrameworkElementAutomationPeer
+            {
+                public NonProseTextBoxAutomationPeer(FluentTextBox owner) : base(owner)
+                {
+                }
+
+                protected override System.Windows.Automation.Peers.AutomationControlType GetAutomationControlTypeCore()
+                {
+                    return System.Windows.Automation.Peers.AutomationControlType.Custom;
+                }
+
+                protected override bool IsControlElementCore() => false;
+                protected override bool IsContentElementCore() => false;
+                protected override List<System.Windows.Automation.Peers.AutomationPeer> GetChildrenCore() => null;
+                public override object GetPattern(System.Windows.Automation.Peers.PatternInterface patternInterface) => null;
+            }
+
+            public FluentTextBox()
+            {
+                SpellCheck.SetIsEnabled(this, false);
+            }
+
+            protected override System.Windows.Automation.Peers.AutomationPeer OnCreateAutomationPeer()
+            {
+                return new NonProseTextBoxAutomationPeer(this);
+            }
+        }
+
+        /// <summary>
         /// Creates a WinUI 3 TextBox with subtle fill and bottom accent underline on focus.
         /// </summary>
         public static TextBox CreateTextBox(string initialText = "", string placeholder = "")
         {
-            var tb = new TextBox
+            var tb = new FluentTextBox
             {
                 Text = initialText ?? string.Empty,
                 FontFamily = BodyFont,
@@ -705,7 +740,7 @@ namespace WinBins.Views
         /// </summary>
         public static TextBox CreateInlineTitleTextBox(string initialText = "")
         {
-            var tb = new TextBox
+            var tb = new FluentTextBox
             {
                 Text = initialText ?? string.Empty,
                 FontFamily = DisplayFont,

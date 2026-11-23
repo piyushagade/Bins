@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Windows;
@@ -758,6 +759,52 @@ namespace WinBins.Views
             }
         }
 
+        private bool AnyLabelWrapsToMultipleLines(
+            IEnumerable<Tuple<BinItem, int>> items,
+            double labelWidth,
+            double fontSize)
+        {
+            if (items == null)
+                return false;
+
+            double pixelsPerDip = 1.0;
+            try
+            {
+                pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+            }
+            catch
+            {
+                pixelsPerDip = 1.0;
+            }
+
+            var typeface = new Typeface(FontFamily, FontStyle, FontWeight, FontStretch);
+            double maxSingleLineWidth = Math.Max(1.0, labelWidth - 0.5);
+
+            foreach (var entry in items)
+            {
+                string text = entry?.Item1?.Name;
+                if (string.IsNullOrEmpty(text))
+                    continue;
+
+                if (text.IndexOf('\n') >= 0 || text.IndexOf('\r') >= 0)
+                    return true;
+
+                var ft = new FormattedText(
+                    text,
+                    CultureInfo.CurrentUICulture,
+                    FlowDirection,
+                    typeface,
+                    fontSize,
+                    Brushes.White,
+                    pixelsPerDip);
+
+                if (ft.Width > maxSingleLineWidth)
+                    return true;
+            }
+
+            return false;
+        }
+
         private static int CountLaunchAllItems(BinGroup bin)
         {
             if (bin == null)
@@ -1099,6 +1146,12 @@ namespace WinBins.Views
                 out double baseIconLabelGap);
             double tileW = baseTileW + pad * 1.2;
             double tileH = baseTileH + pad * 1.2;
+            double labelWidth = Math.Max(44, tileW - 10);
+            if (!AnyLabelWrapsToMultipleLines(matching, labelWidth, fontSize))
+            {
+                tileH -= lineHeight;
+                labelMaxH = lineHeight;
+            }
             double iconTopPad = Math.Round(baseIconTopPad + pad * 0.35, 1);
             double iconLabelGap = Math.Round(baseIconLabelGap + pad * 0.15, 1);
             double marginHalf = Math.Round(pad / 2.0, 1);

@@ -149,7 +149,7 @@ namespace WinBins.Views
             searchDock.Children.Add(escBadge);
 
             var searchInputGrid = new Grid();
-            _searchBox = new TextBox
+            _searchBox = new FluentTheme.FluentTextBox
             {
                 FontFamily = FluentTheme.DisplayFont,
                 FontSize = 15.5,

@@ -4374,6 +4374,7 @@ namespace WinBins.Views
             menu.PlacementTarget = btn;
             menu.Placement = PlacementMode.Bottom;
 
+            menu.Items.Add(FluentTheme.CreateMenuItem("Running / Pinned on Taskbar...", () => AddFromTaskbar_Click(null, null), iconGlyph: "\uE718"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Installed / Store App...", () => AddFromStartMenu_Click(null, null), iconGlyph: "\uE737"));
             menu.Items.Add(FluentTheme.CreateMenuItem("App or Shortcut...", () => AddAppOrShortcut_Click(null, null), iconGlyph: "\uE7C3"));
             menu.Items.Add(FluentTheme.CreateMenuItem("Folder...", () => AddFolder_Click(null, null), iconGlyph: "\uE8B7"));
@@ -5184,24 +5185,48 @@ namespace WinBins.Views
             SaveAndSyncSelectedBin(bumpIcon: true);
         }
 
+        private void AddFromTaskbar_Click(object sender, RoutedEventArgs e)
+        {
+            if (_selectedBin == null)
+                return;
+
+            var picker = new StartMenuPickerWindow(_iconService, AppPickerMode.TaskbarRunningAndPinned) { Owner = this };
+            if (picker.ShowDialog() == true && picker.SelectedApps.Count > 0)
+            {
+                AddDiscoveredAppsToSelectedBin(picker.SelectedApps);
+            }
+        }
+
         private void AddFromStartMenu_Click(object sender, RoutedEventArgs e)
         {
             if (_selectedBin == null)
                 return;
 
-            var picker = new StartMenuPickerWindow(_iconService) { Owner = this };
+            var picker = new StartMenuPickerWindow(_iconService, AppPickerMode.StartMenuAndStore) { Owner = this };
             if (picker.ShowDialog() == true && picker.SelectedApps.Count > 0)
             {
-                foreach (var app in picker.SelectedApps)
-                {
-                    BinItem item = (app.IsPackagedApp || BinItem.IsPackagedApp(app.ShortcutPath))
-                        ? BinItem.FromPackagedApp(app.ShortcutPath, app.Name)
-                        : BinItem.FromPath(app.ShortcutPath);
-                    item.Name = app.Name;
-                    _selectedBin.Items.Add(item);
-                }
-                SaveAndSyncSelectedBin(bumpIcon: true);
+                AddDiscoveredAppsToSelectedBin(picker.SelectedApps);
             }
+        }
+
+        private void AddDiscoveredAppsToSelectedBin(IEnumerable<DiscoveredAppEntry> apps)
+        {
+            if (_selectedBin == null || apps == null)
+                return;
+
+            foreach (var app in apps)
+            {
+                BinItem item = (app.IsPackagedApp || BinItem.IsPackagedApp(app.ShortcutPath))
+                    ? BinItem.FromPackagedApp(app.ShortcutPath, app.Name)
+                    : BinItem.FromPath(app.ShortcutPath);
+                item.Name = app.Name;
+                if (!string.IsNullOrWhiteSpace(app.Arguments))
+                {
+                    item.Arguments = app.Arguments;
+                }
+                _selectedBin.Items.Add(item);
+            }
+            SaveAndSyncSelectedBin(bumpIcon: true);
         }
 
         private void AddAppOrShortcut_Click(object sender, RoutedEventArgs e)

@@ -412,8 +412,14 @@ namespace WinBins.Services
 
         public static bool TryResolveShortcutTarget(string lnkPath, out string targetPath, out string arguments)
         {
+            return TryReadShortcutDetails(lnkPath, out targetPath, out arguments, out _);
+        }
+
+        public static bool TryReadShortcutDetails(string lnkPath, out string targetPath, out string arguments, out string aumid)
+        {
             targetPath = null;
             arguments = null;
+            aumid = null;
             if (string.IsNullOrWhiteSpace(lnkPath) || !File.Exists(lnkPath))
                 return false;
 
@@ -430,11 +436,28 @@ namespace WinBins.Services
                 link.GetArguments(argsSb, argsSb.Capacity);
                 arguments = argsSb.ToString() ?? string.Empty;
 
+                if (link is Win32Interop.IPropertyStore propStore)
+                {
+                    var key = Win32Interop.PKEY_AppUserModel_ID;
+                    if (propStore.GetValue(ref key, out Win32Interop.PropVariant pv) == 0)
+                    {
+                        try
+                        {
+                            aumid = pv.AsString();
+                        }
+                        finally
+                        {
+                            pv.Dispose();
+                        }
+                    }
+                }
+
                 if (!string.IsNullOrWhiteSpace(rawTarget))
                 {
                     targetPath = Environment.ExpandEnvironmentVariables(rawTarget.Trim().Trim('"'));
-                    return !string.IsNullOrWhiteSpace(targetPath);
                 }
+
+                return !string.IsNullOrWhiteSpace(targetPath) || !string.IsNullOrWhiteSpace(aumid);
             }
             catch
             {
@@ -445,6 +468,156 @@ namespace WinBins.Services
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Returns all packaged AUMIDs from the provided list that are currently referenced in Windows Explorer's
+        /// Taskband Favorites registry blob (pinned Store/UWP apps on the Windows 11 taskbar).
+        /// </summary>
+        public static HashSet<string> FindPinnedTaskbandAumids(IEnumerable<string> candidateAumids)
+        {
+            var matched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (candidateAumids == null)
+                return matched;
+
+            byte[] favoritesBytes = ReadTaskbandFavoritesBytes();
+            if (favoritesBytes == null || favoritesBytes.Length == 0)
+                return matched;
+
+            string favAscii = Encoding.ASCII.GetString(favoritesBytes);
+            string favUtf16Even = null;
+            string favUtf16Odd = null;
+            int evenLen = favoritesBytes.Length - (favoritesBytes.Length % 2);
+            if (evenLen >= 2)
+                favUtf16Even = Encoding.Unicode.GetString(favoritesBytes, 0, evenLen);
+            if (favoritesBytes.Length >= 3)
+            {
+                int oddLen = (favoritesBytes.Length - 1) - ((favoritesBytes.Length - 1) % 2);
+                if (oddLen >= 2)
+                    favUtf16Odd = Encoding.Unicode.GetString(favoritesBytes, 1, oddLen);
+            }
+
+            foreach (string aumid in candidateAumids)
+            {
+                if (string.IsNullOrWhiteSpace(aumid) ||
+                    aumid.StartsWith("WinBins.", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (ContainsDecodedIgnoreCase(favAscii, favUtf16Even, favUtf16Odd, aumid))
+                {
+                    matched.Add(aumid);
+                }
+            }
+
+            return matched;
+        }
+
+        /// <summary>
+        /// Enumerates all non-Bins shortcuts currently pinned to the Windows 11 taskbar
+        /// (both User Pinned\TaskBar and active User Pinned\ImplicitAppShortcuts).
+        /// </summary>
+        public static List<string> GetPinnedNonBinTaskbarShortcutFiles()
+        {
+            var results = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            byte[] favoritesBytes = ReadTaskbandFavoritesBytes();
+            string favAscii = null;
+            string favUtf16Even = null;
+            string favUtf16Odd = null;
+            bool hasFavBlob = favoritesBytes != null && favoritesBytes.Length > 0;
+            if (hasFavBlob)
+            {
+                favAscii = Encoding.ASCII.GetString(favoritesBytes);
+                int evenLen = favoritesBytes.Length - (favoritesBytes.Length % 2);
+                if (evenLen >= 2)
+                    favUtf16Even = Encoding.Unicode.GetString(favoritesBytes, 0, evenLen);
+                if (favoritesBytes.Length >= 3)
+                {
+                    int oddLen = (favoritesBytes.Length - 1) - ((favoritesBytes.Length - 1) % 2);
+                    if (oddLen >= 2)
+                        favUtf16Odd = Encoding.Unicode.GetString(favoritesBytes, 1, oddLen);
+                }
+            }
+
+            string selfExe = Assembly.GetExecutingAssembly().Location;
+
+            bool IsBinShortcut(string lnkFile)
+            {
+                if (!TryReadShortcutDetails(lnkFile, out string target, out string args, out string aumid))
+                    return false;
+
+                if (!string.IsNullOrWhiteSpace(aumid) &&
+                    aumid.StartsWith("WinBins.", StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                if (!string.IsNullOrWhiteSpace(args) &&
+                    args.IndexOf("--bin", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+
+                if (!string.IsNullOrWhiteSpace(target))
+                {
+                    if (string.Equals(target, selfExe, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                    string exeName = Path.GetFileName(target);
+                    if (string.Equals(exeName, "Bins.exe", StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+
+                return false;
+            }
+
+            try
+            {
+                string pinnedDir = GetUserPinnedTaskbarFolder();
+                if (Directory.Exists(pinnedDir))
+                {
+                    foreach (string file in Directory.GetFiles(pinnedDir, "*.lnk"))
+                    {
+                        if (IsBinShortcut(file))
+                            continue;
+
+                        if (seen.Add(file))
+                            results.Add(file);
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                string implicitDir = GetImplicitAppShortcutsFolder();
+                if (Directory.Exists(implicitDir) && hasFavBlob)
+                {
+                    foreach (string subDir in Directory.GetDirectories(implicitDir))
+                    {
+                        string hashFolder = Path.GetFileName(subDir);
+                        if (string.IsNullOrWhiteSpace(hashFolder) ||
+                            !ContainsDecodedIgnoreCase(favAscii, favUtf16Even, favUtf16Odd, hashFolder))
+                        {
+                            continue;
+                        }
+
+                        foreach (string file in Directory.GetFiles(subDir, "*.lnk"))
+                        {
+                            if (IsBinShortcut(file))
+                                continue;
+
+                            if (seen.Add(file))
+                                results.Add(file);
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return results;
         }
 
         private static bool InspectShortcutForBin(string lnkPath, string binId, out string aumid)

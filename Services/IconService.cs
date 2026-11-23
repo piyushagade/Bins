@@ -181,7 +181,25 @@ namespace WinBins.Services
             return rawPath;
         }
 
-        private const int MaxWpfImageCacheEntries = 256;
+        private const int MaxWpfImageCacheEntries = 1024;
+        private BitmapSource _defaultPlaceholderSource;
+
+        private void TrimWpfImageCacheIfNeeded()
+        {
+            if (_wpfImageCache.Count <= MaxWpfImageCacheEntries)
+                return;
+
+            int toRemove = 256;
+            foreach (string key in _wpfImageCache.Keys)
+            {
+                if (_wpfImageCache.TryRemove(key, out _))
+                {
+                    toRemove--;
+                    if (toRemove <= 0)
+                        break;
+                }
+            }
+        }
 
         private Bitmap ExtractItemBitmapUncached(string sourcePath, int resourceIndex)
         {
@@ -218,10 +236,7 @@ namespace WinBins.Services
         public BitmapSource GetItemImageSource(BinItem item)
         {
             ResolveItemIconKey(item, out string sourcePath, out int resourceIndex, out string cacheKey);
-            if (_wpfImageCache.Count > MaxWpfImageCacheEntries)
-            {
-                _wpfImageCache.Clear();
-            }
+            TrimWpfImageCacheIfNeeded();
 
             return _wpfImageCache.GetOrAdd(cacheKey, _ =>
             {
@@ -240,10 +255,7 @@ namespace WinBins.Services
         public BitmapSource GetPathImageSource(string path, int resourceIndex = 0)
         {
             string cacheKey = $"{path}|{resourceIndex}";
-            if (_wpfImageCache.Count > MaxWpfImageCacheEntries)
-            {
-                _wpfImageCache.Clear();
-            }
+            TrimWpfImageCacheIfNeeded();
 
             return _wpfImageCache.GetOrAdd(cacheKey, _ =>
             {
@@ -252,6 +264,65 @@ namespace WinBins.Services
                     return ConvertBitmapToBitmapSource(bmp);
                 }
             });
+        }
+
+        public bool TryGetCachedPickerImageSource(string path, out BitmapSource source)
+        {
+            source = null;
+            if (string.IsNullOrWhiteSpace(path))
+                return false;
+
+            if (_wpfImageCache.TryGetValue("picker64|" + path, out source) && source != null)
+                return true;
+            if (_wpfImageCache.TryGetValue(path + "|0", out source) && source != null)
+                return true;
+            if (_wpfImageCache.TryGetValue("target|" + path + "|0", out source) && source != null)
+                return true;
+
+            source = null;
+            return false;
+        }
+
+        public BitmapSource GetPickerImageSource(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return GetDefaultPlaceholderImageSource();
+
+            if (TryGetCachedPickerImageSource(path, out BitmapSource cached))
+                return cached;
+
+            string cacheKey = "picker64|" + path;
+            TrimWpfImageCacheIfNeeded();
+
+            return _wpfImageCache.GetOrAdd(cacheKey, _ =>
+            {
+                using (Bitmap bmp = Win32Interop.ExtractHighResIconBitmap(path, 0, 64) ?? CreateFallbackItemBitmap())
+                {
+                    return ConvertBitmapToBitmapSource(bmp);
+                }
+            });
+        }
+
+        public BitmapSource GetDefaultPlaceholderImageSource()
+        {
+            if (_defaultPlaceholderSource != null)
+                return _defaultPlaceholderSource;
+
+            var bmp = new Bitmap(32, 32, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (bmp)
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.Clear(System.Drawing.Color.Transparent);
+                using (GraphicsPath path = Win32Interop.CreateRoundedRectPath(new Rectangle(3, 3, 26, 26), 6))
+                using (var brush = new SolidBrush(System.Drawing.Color.FromArgb(44, 160, 175, 200)))
+                {
+                    g.FillPath(brush, path);
+                }
+                _defaultPlaceholderSource = ConvertBitmapToBitmapSource(bmp);
+            }
+
+            return _defaultPlaceholderSource;
         }
 
         /// <summary>
