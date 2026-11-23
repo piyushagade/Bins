@@ -39,6 +39,7 @@ namespace WinBins.Views
             Bin,
             Donate,
             Settings,
+            WhatsNew,
             About
         }
 
@@ -56,6 +57,8 @@ namespace WinBins.Views
         private Border _donateNavPill;
         private Border _settingsNavRow;
         private Border _settingsNavPill;
+        private Border _whatsNewNavRow;
+        private Border _whatsNewNavPill;
         private Border _aboutNavRow;
         private Border _aboutNavPill;
 
@@ -63,6 +66,7 @@ namespace WinBins.Views
         private Grid _binWorkspaceView;
         private ScrollViewer _donateView;
         private ScrollViewer _settingsView;
+        private ScrollViewer _whatsNewView;
         private ScrollViewer _aboutView;
         private Border _emptyBinsView;
         private Border _dropHighlightOverlay;
@@ -631,6 +635,14 @@ namespace WinBins.Views
                 out _settingsNavPill);
             navFooter.Children.Add(_settingsNavRow);
 
+            _whatsNewNavRow = CreateFooterNavRow(
+                "\uE789",
+                FluentTheme.TextSecondary,
+                "What's New",
+                WorkspacePane.WhatsNew,
+                out _whatsNewNavPill);
+            navFooter.Children.Add(_whatsNewNavRow);
+
             _aboutNavRow = CreateFooterNavRow(
                 "\uE946",
                 FluentTheme.TextSecondary,
@@ -671,6 +683,9 @@ namespace WinBins.Views
 
             _settingsView = BuildSettingsView();
             sheetHost.Children.Add(_settingsView);
+
+            _whatsNewView = BuildWhatsNewView();
+            sheetHost.Children.Add(_whatsNewView);
 
             _aboutView = BuildAboutView();
             sheetHost.Children.Add(_aboutView);
@@ -2558,6 +2573,277 @@ namespace WinBins.Views
             return card;
         }
 
+        private sealed class ReleaseNotesEntry
+        {
+            public string Version;
+            public string Headline;
+            public bool IsLatest;
+            public string[] Highlights;
+        }
+
+        private ScrollViewer BuildWhatsNewView()
+        {
+            var scroll = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Visibility = Visibility.Collapsed
+            };
+
+            var panel = new StackPanel
+            {
+                Margin = new Thickness(32, 26, 32, 28)
+            };
+
+            panel.Children.Add(new TextBlock
+            {
+                Text = "What's New",
+                FontFamily = FluentTheme.DisplayFont,
+                FontSize = 22,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = FluentTheme.TextPrimary,
+                Margin = new Thickness(0, 0, 0, 4)
+            });
+
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Feature additions and improvements across Bins for Windows 11 releases.",
+                FontSize = 13,
+                Foreground = FluentTheme.TextSecondary,
+                Margin = new Thickness(0, 0, 0, 18)
+            });
+
+            var releases = new[]
+            {
+                new ReleaseNotesEntry
+                {
+                    Version = "v1.5.11",
+                    Headline = "What's New & Release History",
+                    IsLatest = true,
+                    Highlights = new[]
+                    {
+                        "Added a dedicated What's New sidebar view in Bins Manager with release-by-release feature highlights."
+                    }
+                },
+                new ReleaseNotesEntry
+                {
+                    Version = "v1.5.10",
+                    Headline = "Taskbar Picker & Faster App Discovery",
+                    Highlights = new[]
+                    {
+                        "Added \"Add from Taskbar\" picker to import pinned and running taskbar apps and folders directly into a Bin.",
+                        "Rebuilt the Start Menu & Store App Picker with UI virtualization, a 45-second discovery cache, and background async icon loading.",
+                        "Refreshed the high-resolution app icon and refined flyout & theme styling."
+                    }
+                },
+                new ReleaseNotesEntry
+                {
+                    Version = "v1.5.9",
+                    Headline = "Fluent Fanned-Stack App Icon",
+                    Highlights = new[]
+                    {
+                        "Introduced a calm Windows 11 Fluent fanned-stack app icon across the taskbar, system tray, and About view.",
+                        "Improved high-DPI icon rendering for app and tray icons."
+                    }
+                },
+                new ReleaseNotesEntry
+                {
+                    Version = "v1.5.8",
+                    Headline = "Navigation Cleanup",
+                    Highlights = new[]
+                    {
+                        "Streamlined sidebar navigation and simplified the About Bins page."
+                    }
+                },
+                new ReleaseNotesEntry
+                {
+                    Version = "v1.5.7",
+                    Headline = "Update Checker & UI Refinements",
+                    Highlights = new[]
+                    {
+                        "Added automatic background update checking and privacy-friendly anonymous usage counters.",
+                        "Polished Bin Manager, Flyout, and Omni-Search visuals."
+                    }
+                },
+                new ReleaseNotesEntry
+                {
+                    Version = "v1.5.6",
+                    Headline = "Live Centered-Taskbar Tracking",
+                    Highlights = new[]
+                    {
+                        "Tracked centered Windows 11 taskbar button shifts in real time so indicator dots and hover peek stay perfectly aligned.",
+                        "Decoupled Icon Backplate from Bin accent tint for independent customization."
+                    }
+                },
+                new ReleaseNotesEntry
+                {
+                    Version = "v1.5.4",
+                    Headline = "Memory & Idle CPU Optimization",
+                    Highlights = new[]
+                    {
+                        "Eliminated UIA COM and GDI bitmap leaks, cached taskbar pin lookups, and switched MainWindow to lazy initialization.",
+                        "Fixed Windows 11 taskbar UIA rect lookup for indicator dots and hover peek."
+                    }
+                },
+                new ReleaseNotesEntry
+                {
+                    Version = "v1.5.1 – v1.5.3",
+                    Headline = "Backplate Sizing & Padding",
+                    Highlights = new[]
+                    {
+                        "Enlarged backplate Bins and sub-icons to match unplated Bin footprints with balanced 9px inner padding.",
+                        "Updated About Bins with the official website link."
+                    }
+                },
+                new ReleaseNotesEntry
+                {
+                    Version = "v1.5.0",
+                    Headline = "Profiles, Explorer Menu & Appearance Controls",
+                    Highlights = new[]
+                    {
+                        "Added Bin Profiles (Work, Dev, Gaming) with 1-click and CLI switching (Bins.exe --profile <name>).",
+                        "Added per-user File Explorer \"Add to Bin\" right-click context menu (no admin required).",
+                        "Added Broken Link & Duplicate Health Checker with 1-click Relocate.",
+                        "Added Flyout Appearance Controls: Acrylic, Mica, or Solid backdrops, surface opacity slider, and tile icon scaling.",
+                        "Added Inno Setup installer and WinGet manifest packaging."
+                    }
+                },
+                new ReleaseNotesEntry
+                {
+                    Version = "v1.4.0 – v1.4.6",
+                    Headline = "Omni-Search, Smart Live Folders & Running Indicators",
+                    Highlights = new[]
+                    {
+                        "Added Global Cross-Bin Omni-Search (Ctrl+Alt+Space), Smart Live Folders, Category Tabs, and 7 Windows 11 accent tints.",
+                        "Added built-in System, Media & Utility tiles, Quick Text Snippets, Item Properties, and staggered Open Workspace launches.",
+                        "Added native taskbar running dots/active pill, Acrylic hover peek strip, unread badge parsing, and Keep open apps inside their Bin while preserving Alt+Tab, Win+Tab, and Snap Assist."
+                    }
+                },
+                new ReleaseNotesEntry
+                {
+                    Version = "v1.3.0",
+                    Headline = "Drag-and-Drop Power Workflows & Themes",
+                    Highlights = new[]
+                    {
+                        "Added drag files onto tiles, drag-hover pop-open, drag-and-drop reordering & cross-Bin moves, and Quick Folder Peek.",
+                        "Added Microsoft Store / UWP app support, per-Bin global hotkeys, Hover-to-Open mode, Dark / Light / System themes, and .bins archive backup & cloud sync."
+                    }
+                },
+                new ReleaseNotesEntry
+                {
+                    Version = "v1.2.0",
+                    Headline = "Native Windows 11 Jump Lists",
+                    Highlights = new[]
+                    {
+                        "Added Windows 11 Taskbar Jump Lists (ICustomDestinationList) and sidebar Bin context menus."
+                    }
+                }
+            };
+
+            foreach (var rel in releases)
+            {
+                var card = new Border
+                {
+                    Background = FluentTheme.CardBg,
+                    BorderBrush = FluentTheme.CardBorder,
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(6),
+                    Padding = new Thickness(18, 14, 18, 14),
+                    Margin = new Thickness(0, 0, 0, 10)
+                };
+
+                var cardStack = new StackPanel();
+
+                var headerDock = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+                var leftHeader = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                leftHeader.Children.Add(new TextBlock
+                {
+                    Text = rel.Version,
+                    FontFamily = FluentTheme.DisplayFont,
+                    FontSize = 15,
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = FluentTheme.TextPrimary,
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+
+                if (rel.IsLatest)
+                {
+                    leftHeader.Children.Add(new Border
+                    {
+                        Background = FluentTheme.AccentBrush,
+                        CornerRadius = new CornerRadius(10),
+                        Padding = new Thickness(8, 2, 8, 2),
+                        Margin = new Thickness(8, 0, 0, 0),
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Child = new TextBlock
+                        {
+                            Text = "Latest",
+                            FontSize = 11,
+                            FontWeight = FontWeights.SemiBold,
+                            Foreground = FluentTheme.AccentInkBrush
+                        }
+                    });
+                }
+
+                var headlineText = new TextBlock
+                {
+                    Text = rel.Headline,
+                    FontSize = 12.5,
+                    FontWeight = FontWeights.Medium,
+                    Foreground = FluentTheme.TextMuted,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                DockPanel.SetDock(headlineText, Dock.Right);
+                headerDock.Children.Add(headlineText);
+                headerDock.Children.Add(leftHeader);
+                cardStack.Children.Add(headerDock);
+
+                foreach (var item in rel.Highlights)
+                {
+                    var row = new Grid { Margin = new Thickness(0, 2.5, 0, 2.5) };
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(14) });
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+                    var bullet = new Border
+                    {
+                        Width = 5,
+                        Height = 5,
+                        CornerRadius = new CornerRadius(2.5),
+                        Background = FluentTheme.AccentBrush,
+                        VerticalAlignment = VerticalAlignment.Top,
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                        Margin = new Thickness(2, 6.5, 0, 0)
+                    };
+                    Grid.SetColumn(bullet, 0);
+                    row.Children.Add(bullet);
+
+                    var text = new TextBlock
+                    {
+                        Text = item,
+                        FontSize = 12.5,
+                        Foreground = FluentTheme.TextSecondary,
+                        TextWrapping = TextWrapping.Wrap,
+                        LineHeight = 18
+                    };
+                    Grid.SetColumn(text, 1);
+                    row.Children.Add(text);
+
+                    cardStack.Children.Add(row);
+                }
+
+                card.Child = cardStack;
+                panel.Children.Add(card);
+            }
+
+            scroll.Content = panel;
+            return scroll;
+        }
+
         private ScrollViewer BuildAboutView()
         {
             var scroll = new ScrollViewer
@@ -3095,6 +3381,7 @@ namespace WinBins.Views
 
             ApplyFooterNavState(_donateNavRow, _donateNavPill, _activePane == WorkspacePane.Donate);
             ApplyFooterNavState(_settingsNavRow, _settingsNavPill, _activePane == WorkspacePane.Settings);
+            ApplyFooterNavState(_whatsNewNavRow, _whatsNewNavPill, _activePane == WorkspacePane.WhatsNew);
             ApplyFooterNavState(_aboutNavRow, _aboutNavPill, _activePane == WorkspacePane.About);
         }
 
@@ -3240,6 +3527,7 @@ namespace WinBins.Views
         {
             _donateView.Visibility = _activePane == WorkspacePane.Donate ? Visibility.Visible : Visibility.Collapsed;
             _settingsView.Visibility = _activePane == WorkspacePane.Settings ? Visibility.Visible : Visibility.Collapsed;
+            _whatsNewView.Visibility = _activePane == WorkspacePane.WhatsNew ? Visibility.Visible : Visibility.Collapsed;
             _aboutView.Visibility = _activePane == WorkspacePane.About ? Visibility.Visible : Visibility.Collapsed;
 
             if (_activePane != WorkspacePane.Bin)

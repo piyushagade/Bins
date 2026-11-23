@@ -1009,6 +1009,93 @@ kbd {
 }
 
 /* ==========================================================================
+   Compact What's New / Changelog Section
+   ========================================================================== */
+.changelog-section { padding: 32px 0 48px; }
+
+.changelog-list {
+  max-width: 760px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.changelog-item {
+  padding: 18px 20px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.changelog-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.ver-tag {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+}
+
+.ver-tag.latest {
+  background: var(--accent-soft);
+  border-color: rgba(96, 205, 255, 0.4);
+  color: var(--accent);
+}
+
+.ver-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.changelog-item ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+}
+
+.changelog-more {
+  margin-top: 4px;
+}
+
+.changelog-more summary {
+  cursor: pointer;
+  list-style: none;
+  text-align: center;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--accent);
+  padding: 8px 12px;
+  border-radius: 10px;
+  transition: background 0.15s ease;
+}
+
+.changelog-more summary::-webkit-details-marker { display: none; }
+.changelog-more summary:hover { background: var(--surface); }
+
+.changelog-earlier {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ==========================================================================
    Centered Download Section
    ========================================================================== */
 .download-section { padding: 48px 0 96px; }
