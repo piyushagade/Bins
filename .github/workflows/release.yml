@@ -262,14 +262,14 @@ jobs:
           $vtUrl = "${{ steps.virustotal.outputs.report_url }}"
           if ([string]::IsNullOrWhiteSpace($vtUrl)) { exit 0 }
 
-          $currentBody = gh release view $tag --json body --jq .body
+          $currentBody = ((gh release view $tag --json body --jq .body) -join "`n")
           if ($currentBody -notmatch [regex]::Escape($vtUrl)) {
-            $newHeader = Get-Content "dist\release-notes.md" -Raw
+            $newHeader = (Get-Content "dist\release-notes.md" -Raw).Trim()
             $changelog = ""
             if ($currentBody -match '(?s)(\*\*Full Changelog\*\*.*)') {
               $changelog = "`n`n" + $Matches[1].Trim()
             }
-            $merged = $newHeader.Trim() + $changelog
+            $merged = $newHeader + $changelog
             $merged | Set-Content -Path "dist\release-notes-final.md" -Encoding utf8
             gh release edit $tag --notes-file "dist\release-notes-final.md"
           }
