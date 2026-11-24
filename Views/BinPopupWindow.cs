@@ -144,6 +144,7 @@ namespace WinBins.Views
                 int one = 1;
                 Win32Interop.DwmSetWindowAttribute(hwnd, Win32Interop.DWMWA_DISALLOW_PEEK, ref one, sizeof(int));
                 Win32Interop.DwmSetWindowAttribute(hwnd, Win32Interop.DWMWA_EXCLUDED_FROM_PEEK, ref one, sizeof(int));
+                HwndSource.FromHwnd(hwnd)?.AddHook(PopupWndProc);
             };
 
             _themeChangedHandler = () =>
@@ -201,8 +202,7 @@ namespace WinBins.Views
                 BorderBrush = FluentTheme.SubtleBorder,
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(10, 10, 10, 10),
-                MinWidth = 110
+                Padding = new Thickness(10, 10, 10, 10)
             };
             _outerBorder.MouseRightButtonUp += OuterBorder_MouseRightButtonUp;
 
@@ -394,12 +394,12 @@ namespace WinBins.Views
             _itemsGrid = new UniformGrid
             {
                 Columns = 4,
-                HorizontalAlignment = HorizontalAlignment.Left
+                HorizontalAlignment = HorizontalAlignment.Center
             };
 
             _contentHostStack = new StackPanel
             {
-                HorizontalAlignment = HorizontalAlignment.Left
+                HorizontalAlignment = HorizontalAlignment.Center
             };
             _contentHostStack.Children.Add(_itemsGrid);
 
@@ -465,6 +465,19 @@ namespace WinBins.Views
             DragOver += BinPopupWindow_DragOver;
             DragLeave += BinPopupWindow_DragLeave;
             Drop += BinPopupWindow_Drop;
+        }
+
+        private IntPtr PopupWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            if (msg == Win32Interop.WM_GETMINMAXINFO && lParam != IntPtr.Zero)
+            {
+                var mmi = System.Runtime.InteropServices.Marshal.PtrToStructure<Win32Interop.MINMAXINFO>(lParam);
+                mmi.ptMinTrackSize.X = 1;
+                mmi.ptMinTrackSize.Y = 1;
+                System.Runtime.InteropServices.Marshal.StructureToPtr(mmi, lParam, true);
+                handled = true;
+            }
+            return IntPtr.Zero;
         }
 
         private void ApplyPopupDwmStyling(IntPtr hwnd)
@@ -533,6 +546,17 @@ namespace WinBins.Views
             }
 
             Win32Interop.DismissTaskbarThumbnailWindows(anchorScreenPx, cancelTrayHoverTooltip: true);
+
+            if (_taskbarManager != null &&
+                _taskbarManager.TryGetBinTaskbarAnchorPoint(bin.Id, out System.Drawing.Point taskbarCenter))
+            {
+                var anchorScreen = System.Windows.Forms.Screen.FromPoint(anchorScreenPx);
+                var taskbarScreen = System.Windows.Forms.Screen.FromPoint(taskbarCenter);
+                if (string.Equals(anchorScreen.DeviceName, taskbarScreen.DeviceName, StringComparison.OrdinalIgnoreCase))
+                {
+                    anchorScreenPx = taskbarCenter;
+                }
+            }
 
             _subBinStack.Clear();
             _lastAnchorScreenPx = anchorScreenPx;
@@ -1135,6 +1159,7 @@ namespace WinBins.Views
             }
 
             int cols = Math.Max(1, Math.Min(10, _currentBin.Columns));
+            bool showLabels = _currentBin.ShowItemLabels;
             GetDensityMetrics(
                 out double iconSize,
                 out double baseTileW,
@@ -1144,16 +1169,33 @@ namespace WinBins.Views
                 out double labelMaxH,
                 out double baseIconTopPad,
                 out double baseIconLabelGap);
-            double tileW = baseTileW + pad * 1.2;
-            double tileH = baseTileH + pad * 1.2;
-            double labelWidth = Math.Max(44, tileW - 10);
-            if (!AnyLabelWrapsToMultipleLines(matching, labelWidth, fontSize))
+            double tileW;
+            double tileH;
+            double iconTopPad;
+            double iconLabelGap;
+            if (showLabels)
             {
-                tileH -= lineHeight;
-                labelMaxH = lineHeight;
+                tileW = baseTileW + pad * 1.2;
+                tileH = baseTileH + pad * 1.2;
+                double labelWidth = Math.Max(44, tileW - 10);
+                if (!AnyLabelWrapsToMultipleLines(matching, labelWidth, fontSize))
+                {
+                    tileH -= lineHeight;
+                    labelMaxH = lineHeight;
+                }
+                iconTopPad = Math.Round(baseIconTopPad + pad * 0.35, 1);
+                iconLabelGap = Math.Round(baseIconLabelGap + pad * 0.15, 1);
             }
-            double iconTopPad = Math.Round(baseIconTopPad + pad * 0.35, 1);
-            double iconLabelGap = Math.Round(baseIconLabelGap + pad * 0.15, 1);
+            else
+            {
+                double iconOnlyPad = Math.Round(baseIconTopPad + pad * 0.45, 1);
+                double tileSide = Math.Round(iconSize + iconOnlyPad * 2 + 4);
+                tileW = tileSide;
+                tileH = tileSide;
+                iconTopPad = 0;
+                iconLabelGap = 0;
+                labelMaxH = 0;
+            }
             double marginHalf = Math.Round(pad / 2.0, 1);
             double fullRowHeight = tileH + marginHalf * 2.0;
 
@@ -1372,23 +1414,30 @@ namespace WinBins.Views
 
             var tileOverlayGrid = new Grid();
 
-            // Fixed top-anchored 2-row layout so every icon in a row sits on the exact same horizontal line
-            // and 2-line wrapped labels never push or clip icons upward.
+            bool showLabels = _currentBin?.ShowItemLabels ?? true;
+
+            // Fixed top-anchored 2-row layout when labels are shown so every icon sits on the same horizontal line;
+            // centered single-cell layout when icon labels are hidden.
             var contentGrid = new Grid
             {
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
-                Margin = new Thickness(4, iconTopPad, 4, bottomPad)
+                Margin = showLabels
+                    ? new Thickness(4, iconTopPad, 4, bottomPad)
+                    : new Thickness(0, 0, 0, 2)
             };
-            contentGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(iconSize + iconLabelGap, GridUnitType.Pixel) });
-            contentGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            if (showLabels)
+            {
+                contentGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(iconSize + iconLabelGap, GridUnitType.Pixel) });
+                contentGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            }
 
             var iconWrap = new Grid
             {
                 Width = iconSize,
                 Height = iconSize,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Top
+                VerticalAlignment = showLabels ? VerticalAlignment.Top : VerticalAlignment.Center
             };
 
             var iconImg = new Image
@@ -1509,26 +1558,32 @@ namespace WinBins.Views
                 });
             }
 
-            Grid.SetRow(iconWrap, 0);
+            if (showLabels)
+            {
+                Grid.SetRow(iconWrap, 0);
+            }
             contentGrid.Children.Add(iconWrap);
 
-            var label = new TextBlock
+            if (showLabels)
             {
-                Text = item.Name,
-                Width = Math.Max(44, tileW - 10),
-                FontSize = fontSize,
-                LineHeight = lineHeight,
-                LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
-                Foreground = FluentTheme.TextPrimary,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Top,
-                TextAlignment = TextAlignment.Center,
-                TextWrapping = TextWrapping.Wrap,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                MaxHeight = labelMaxH
-            };
-            Grid.SetRow(label, 1);
-            contentGrid.Children.Add(label);
+                var label = new TextBlock
+                {
+                    Text = item.Name,
+                    Width = Math.Max(44, tileW - 10),
+                    FontSize = fontSize,
+                    LineHeight = lineHeight,
+                    LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+                    Foreground = FluentTheme.TextPrimary,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Top,
+                    TextAlignment = TextAlignment.Center,
+                    TextWrapping = TextWrapping.Wrap,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    MaxHeight = labelMaxH
+                };
+                Grid.SetRow(label, 1);
+                contentGrid.Children.Add(label);
+            }
             tileOverlayGrid.Children.Add(contentGrid);
 
             if (isRunning)
@@ -3084,8 +3139,8 @@ namespace WinBins.Views
             if (dpi == 0) dpi = 96;
             double scale = dpi / 96.0;
 
-            int popupW = Math.Max(100, (int)Math.Ceiling(ActualWidth * scale));
-            int popupH = Math.Max(80, (int)Math.Ceiling(ActualHeight * scale));
+            int popupW = Math.Max(48, (int)Math.Ceiling(ActualWidth * scale));
+            int popupH = Math.Max(48, (int)Math.Ceiling(ActualHeight * scale));
 
             var screen = System.Windows.Forms.Screen.FromPoint(anchorPx);
             System.Drawing.Rectangle work = screen.WorkingArea;

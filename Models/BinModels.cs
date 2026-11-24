@@ -345,6 +345,9 @@ namespace WinBins.Models
         [DataMember(Order = 32)]
         public bool ShowFlyoutLaunchAllButton { get; set; }
 
+        [DataMember(Order = 33)]
+        public bool ShowItemLabels { get; set; }
+
         public BinGroup()
         {
             SetFieldDefaults();
@@ -390,6 +393,7 @@ namespace WinBins.Models
             LiveFolderRecentMode = false;
             ShowNotificationBadges = true;
             ShowFlyoutLaunchAllButton = false;
+            ShowItemLabels = true;
         }
 
         public void EnsureDefaults()

@@ -121,6 +121,7 @@ namespace WinBins.Views
         private CheckBox _showLaunchAllToggle;
         private CheckBox _showAddToggle;
         private CheckBox _showEditToggle;
+        private CheckBox _showItemLabelsToggle;
         private CheckBox _hideRunningAppsBinToggle;
         private StackPanel _mosaicBackplateRowWrapper;
         private CheckBox _mosaicBackplateToggle;
@@ -1623,6 +1624,13 @@ namespace WinBins.Views
             controlsRows.Children.Add(CreateFlyoutSettingRow("Edit button", _showEditToggle));
             controlsRows.Children.Add(CreateSettingsRowDivider());
 
+            _showItemLabelsToggle = FluentTheme.CreateToggleCheckBox(null, true);
+            _showItemLabelsToggle.ToolTip = "Show item names below icons inside the Bin flyout. Turn off for a clean icon-only grid.";
+            _showItemLabelsToggle.Checked += FlyoutHeaderVisibility_Changed;
+            _showItemLabelsToggle.Unchecked += FlyoutHeaderVisibility_Changed;
+            controlsRows.Children.Add(CreateFlyoutSettingRow("Item labels", _showItemLabelsToggle));
+            controlsRows.Children.Add(CreateSettingsRowDivider());
+
             _showNotificationBadgesToggle = FluentTheme.CreateToggleCheckBox(null, true);
             _showNotificationBadgesToggle.ToolTip = "Show unread notification counts parsed from running app titles on tiles and taskbar dots";
             _showNotificationBadgesToggle.Checked += (_, __) =>
@@ -2617,9 +2625,20 @@ namespace WinBins.Views
             {
                 new ReleaseNotesEntry
                 {
+                    Version = "v1.5.12",
+                    Headline = "Icon-Only Tiles & Taskbar-Centered Flyouts",
+                    IsLatest = true,
+                    Highlights = new[]
+                    {
+                        "Added an Item labels toggle per Bin to hide text labels inside the flyout for a clean icon-only grid (hover tooltips still show item names).",
+                        "Clicking a pinned Bin now centers the flyout directly above the pinned taskbar icon instead of the cursor position."
+                    }
+                },
+                new ReleaseNotesEntry
+                {
                     Version = "v1.5.11",
                     Headline = "What's New & Release History",
-                    IsLatest = true,
+                    IsLatest = false,
                     Highlights = new[]
                     {
                         "Added a dedicated What's New sidebar view in Bins Manager with release-by-release feature highlights."
@@ -3740,6 +3759,10 @@ namespace WinBins.Views
             }
             _showAddToggle.IsChecked = _selectedBin.ShowFlyoutAddButton;
             _showEditToggle.IsChecked = _selectedBin.ShowFlyoutEditButton;
+            if (_showItemLabelsToggle != null)
+            {
+                _showItemLabelsToggle.IsChecked = _selectedBin.ShowItemLabels;
+            }
             if (_hideRunningAppsBinToggle != null)
             {
                 _hideRunningAppsBinToggle.IsChecked = _selectedBin.HideRunningAppsOnTaskbar;
@@ -5402,6 +5425,10 @@ namespace WinBins.Views
             }
             _selectedBin.ShowFlyoutAddButton = _showAddToggle.IsChecked == true;
             _selectedBin.ShowFlyoutEditButton = _showEditToggle.IsChecked == true;
+            if (_showItemLabelsToggle != null)
+            {
+                _selectedBin.ShowItemLabels = _showItemLabelsToggle.IsChecked == true;
+            }
             SaveAndSyncSelectedBin(bumpIcon: false);
         }
 

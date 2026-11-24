@@ -2,7 +2,7 @@
 # Replace InstallerUrl and InstallerSha256 with the published GitHub Release asset before submitting to microsoft/winget-pkgs.
 
 PackageIdentifier: PiyushAgade.Bins
-PackageVersion: 1.5.6
+PackageVersion: 1.5.12
 PackageLocale: en-US
 Publisher: Piyush Agade
 PublisherUrl: https://app.piyushagade.xyz/bins
@@ -22,7 +22,7 @@ Installers:
   - Architecture: x64
     Scope: user
     InstallerType: inno
-    InstallerUrl: https://github.com/piyushagade/Bins/releases/download/v1.5.6/Bins-Setup-1.5.6-x64.exe
+    InstallerUrl: https://github.com/piyushagade/Bins/releases/download/v1.5.12/Bins-Setup-1.5.12-x64.exe
     InstallerSha256: 51D476639225DDAE428FFB6339948A696EE164AF0D1344A9C010D04633650FD0
     InstallerSwitches:
       Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
