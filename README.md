@@ -1,14 +1,15 @@
 <div align="center">
 
-<img width="112" height="112" alt="Bins" src="https://github.com/user-attachments/assets/a29b0206-3e7a-485c-93b2-1de2a6f37034" />
+<img src="docs/assets/app-icon.png" alt="Bins" width="96" />
 
 # Bins
 
 **A native Windows 11 grouped taskbar icon launcher with Fluent mosaic Bins.**
 
-![Windows 11 (x64)](https://img.shields.io/badge/Windows-11%20(x64)-0078D4?style=flat-square)
-![.NET 4.8 | WPF](https://img.shields.io/badge/.NET-4.8%20%7C%20WPF-512BD4?style=flat-square&logo=dotnet&logoColor=white)
-![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-EA6A1F?style=flat-square)
+[![Latest Release](https://img.shields.io/github/v/release/piyushagade/Bins?style=flat-square&logo=github)](https://github.com/piyushagade/Bins/releases/latest)
+[![Platform](https://img.shields.io/badge/Windows-11%20%28x64%29-0078D6?style=flat-square&logo=windows)](https://github.com/piyushagade/Bins/releases/latest)
+[![.NET 4.8](https://img.shields.io/badge/.NET-4.8%20%7C%20WPF-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
+[![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-orange?style=flat-square)](LICENSE)
 
 *Built natively in C# on `WPF` and Win32 / DWM / Shell COM Interop with **zero third-party dependencies**.*
 
