@@ -113,96 +113,123 @@ jobs:
           "portable_path=$portablePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "portable_sha256=$portableSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      - name: Scan installer with VirusTotal
+      - name: Scan release assets with VirusTotal
         id: virustotal
         shell: pwsh
         env:
           VT_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
         run: |
-          $setupPath = "${{ steps.installer.outputs.setup_path }}"
-          $sha = "${{ steps.installer.outputs.sha256 }}"
-          $shaLower = $sha.ToLowerInvariant()
-          $fileName = Split-Path -Leaf $setupPath
-          $reportUrl = "https://www.virustotal.com/gui/file/$shaLower"
+          $targets = @(
+            @{ Path = "${{ steps.installer.outputs.portable_path }}"; Sha = "${{ steps.installer.outputs.portable_sha256 }}" },
+            @{ Path = "${{ steps.installer.outputs.setup_path }}";    Sha = "${{ steps.installer.outputs.sha256 }}" }
+          )
 
           if ([string]::IsNullOrWhiteSpace($env:VT_API_KEY)) {
             Write-Warning "VIRUSTOTAL_API_KEY secret is not configured; skipping VirusTotal scan."
-            "summary=Skipped (VIRUSTOTAL_API_KEY secret not set)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "has_results=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             "report_url=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             exit 0
           }
 
           $headers = @{ "x-apikey" = $env:VT_API_KEY }
-          $fileItem = Get-Item -Path $setupPath
+          $scans = @()
 
-          # Use large-file upload URL if installer exceeds 32 MB
-          if ($fileItem.Length -gt 32MB) {
-            $uploadUrlResp = Invoke-RestMethod -Uri "https://www.virustotal.com/api/v3/files/upload_url" -Headers $headers -Method Get
-            $uploadUrl = $uploadUrlResp.data
-          } else {
-            $uploadUrl = "https://www.virustotal.com/api/v3/files"
+          foreach ($t in $targets) {
+            $fileItem = Get-Item -Path $t.Path
+            $fileName = $fileItem.Name
+            $shaLower = $t.Sha.ToLowerInvariant()
+            $reportUrl = "https://www.virustotal.com/gui/file/$shaLower"
+
+            if ($fileItem.Length -gt 32MB) {
+              $uploadUrlResp = Invoke-RestMethod -Uri "https://www.virustotal.com/api/v3/files/upload_url" -Headers $headers -Method Get
+              $uploadUrl = $uploadUrlResp.data
+            } else {
+              $uploadUrl = "https://www.virustotal.com/api/v3/files"
+            }
+
+            Write-Host "Uploading $fileName ($([math]::Round($fileItem.Length / 1MB, 2)) MB) to VirusTotal..."
+            $uploadResp = Invoke-RestMethod -Uri $uploadUrl -Headers $headers -Method Post -Form @{ file = $fileItem }
+            $analysisId = $uploadResp.data.id
+            if (-not $analysisId) {
+              throw "VirusTotal upload did not return an analysis ID for $fileName."
+            }
+
+            $scans += @{
+              FileName   = $fileName
+              ShaLower   = $shaLower
+              ReportUrl  = $reportUrl
+              AnalysisId = $analysisId
+              Status     = "queued"
+              Stats      = $null
+            }
+            Start-Sleep -Seconds 5
           }
 
-          Write-Host "Uploading $fileName ($([math]::Round($fileItem.Length / 1MB, 2)) MB) to VirusTotal..."
-          $uploadResp = Invoke-RestMethod -Uri $uploadUrl -Headers $headers -Method Post -Form @{ file = $fileItem }
-          $analysisId = $uploadResp.data.id
-          if (-not $analysisId) {
-            throw "VirusTotal upload did not return an analysis ID."
-          }
-
-          Write-Host "Analysis queued (ID: $analysisId). Polling for completion..."
-          $status = "queued"
-          $stats = $null
-          $maxAttempts = 20
+          Write-Host "Polling VirusTotal analyses for completion..."
+          $maxAttempts = 18
           for ($i = 1; $i -le $maxAttempts; $i++) {
-            Start-Sleep -Seconds 15
-            $analysisResp = Invoke-RestMethod -Uri "https://www.virustotal.com/api/v3/analyses/$analysisId" -Headers $headers -Method Get
-            $status = $analysisResp.data.attributes.status
-            Write-Host "Attempt $i/$maxAttempts - status: $status"
-            if ($status -eq "completed") {
-              $stats = $analysisResp.data.attributes.stats
-              break
+            Start-Sleep -Seconds 20
+            $pending = 0
+            foreach ($s in $scans) {
+              if ($s.Status -eq "completed") { continue }
+              $analysisResp = Invoke-RestMethod -Uri "https://www.virustotal.com/api/v3/analyses/$($s.AnalysisId)" -Headers $headers -Method Get
+              $s.Status = $analysisResp.data.attributes.status
+              Write-Host "Attempt $i/$maxAttempts - $($s.FileName): $($s.Status)"
+              if ($s.Status -eq "completed") {
+                $s.Stats = $analysisResp.data.attributes.stats
+              } else {
+                $pending++
+              }
             }
+            if ($pending -eq 0) { break }
           }
 
-          if ($status -eq "completed" -and $stats) {
-            $malicious = [int]$stats.malicious
-            $suspicious = [int]$stats.suspicious
-            $undetected = [int]$stats.undetected
-            $harmless = [int]$stats.harmless
-            $total = $malicious + $suspicious + $undetected + $harmless
-            $summary = "$malicious/$total engines flagged as malicious ($suspicious suspicious)"
-            $badgeMsg = if ($malicious -eq 0) { "0/$total clean" } else { "$malicious/$total flagged" }
-            $badgeColor = if ($malicious -eq 0) { "10B981" } else { "F59E0B" }
-            Write-Host "VirusTotal scan completed: $summary"
-            Write-Host "Report URL: $reportUrl"
-            if ($malicious -gt 0) {
-              Write-Warning "VirusTotal reported $malicious malicious detection(s). Review the report: $reportUrl"
+          $tableLines = @(
+            "### VirusTotal Scans"
+            ""
+            "| File | SHA-256 | Result | Report |"
+            "| --- | --- | --- | --- |"
+          )
+
+          $setupBadgeMsg = "Scanned"
+          $setupBadgeColor = "10B981"
+          $primaryReportUrl = ""
+
+          foreach ($s in $scans) {
+            if ($s.Status -eq "completed" -and $s.Stats) {
+              $malicious = [int]$s.Stats.malicious
+              $suspicious = [int]$s.Stats.suspicious
+              $undetected = [int]$s.Stats.undetected
+              $harmless = [int]$s.Stats.harmless
+              $total = $malicious + $suspicious + $undetected + $harmless
+              $resultText = "$malicious / $total detections"
+              if ($malicious -gt 0) {
+                Write-Warning "$($s.FileName): VirusTotal reported $malicious malicious detection(s). Report: $($s.ReportUrl)"
+              }
+              if ($s.FileName -like "Bins-Setup-*") {
+                $setupBadgeMsg = if ($malicious -eq 0) { "0/$total clean" } else { "$malicious/$total detections" }
+                $setupBadgeColor = if ($malicious -eq 0) { "10B981" } else { "F59E0B" }
+              }
+            } else {
+              $resultText = "In progress ($($s.Status))"
             }
-          } else {
-            $summary = "Scan still in progress (status: $status)"
-            $badgeMsg = "scanning"
-            $badgeColor = "0078D6"
-            Write-Warning "VirusTotal scan did not finish within timeout. Check report: $reportUrl"
+
+            $primaryReportUrl = $s.ReportUrl
+            $tableLines += "| ``$($s.FileName)`` | ``$($s.ShaLower)`` | $resultText | [View Report]($($s.ReportUrl)) |"
           }
+
+          $tableLines | Set-Content -Path "dist\virustotal-table.md" -Encoding utf8
+          $tableLines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
 
           @{
             schemaVersion = 1
             label         = "VirusTotal"
-            message       = $badgeMsg
-            color         = $badgeColor
+            message       = $setupBadgeMsg
+            color         = $setupBadgeColor
           } | ConvertTo-Json -Compress | Set-Content -Path "dist\virustotal-badge.json" -Encoding utf8
 
-          "summary=$summary" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "report_url=$reportUrl" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-          @(
-            "### VirusTotal Scan"
-            "- **File:** ``$fileName``"
-            "- **SHA-256:** ``$sha``"
-            "- **Result:** $summary"
-            "- **Report:** [$reportUrl]($reportUrl)"
-          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "has_results=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "report_url=$primaryReportUrl" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
@@ -221,21 +248,21 @@ jobs:
         if: github.ref_type == 'tag' || inputs.create_release == true
         shell: pwsh
         run: |
-          $ver = "${{ steps.version.outputs.value }}"
-          $sha = "${{ steps.installer.outputs.sha256 }}"
-          $portableSha = "${{ steps.installer.outputs.portable_sha256 }}"
-          $vtSummary = "${{ steps.virustotal.outputs.summary }}"
-          $vtUrl = "${{ steps.virustotal.outputs.report_url }}"
-
-          $lines = @(
-            "### Verification"
-            "- **Installer:** ``Bins-Setup-$ver-x64.exe`` — SHA-256: ``$sha``"
-            "- **Portable ZIP:** ``Bins-Portable-$ver-x64.zip`` — SHA-256: ``$portableSha``"
-          )
-          if (-not [string]::IsNullOrWhiteSpace($vtUrl)) {
-            $lines += "- **VirusTotal (Setup):** [$vtSummary]($vtUrl)"
+          if (Test-Path "dist\virustotal-table.md") {
+            Copy-Item -Force "dist\virustotal-table.md" "dist\release-notes.md"
+          } else {
+            $ver = "${{ steps.version.outputs.value }}"
+            $sha = "${{ steps.installer.outputs.sha256 }}".ToLowerInvariant()
+            $portableSha = "${{ steps.installer.outputs.portable_sha256 }}".ToLowerInvariant()
+            @(
+              "### Verification"
+              ""
+              "| File | SHA-256 |"
+              "| --- | --- |"
+              "| ``Bins-Portable-$ver-x64.zip`` | ``$portableSha`` |"
+              "| ``Bins-Setup-$ver-x64.exe`` | ``$sha`` |"
+            ) | Set-Content -Path "dist\release-notes.md" -Encoding utf8
           }
-          $lines | Set-Content -Path "dist\release-notes.md" -Encoding utf8
 
       - name: Create GitHub Release
         if: github.ref_type == 'tag' || inputs.create_release == true
@@ -263,7 +290,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($vtUrl)) { exit 0 }
 
           $currentBody = ((gh release view $tag --json body --jq .body) -join "`n")
-          if ($currentBody -notmatch [regex]::Escape($vtUrl)) {
+          if (($currentBody -notmatch '### VirusTotal Scans') -or ($currentBody -notmatch [regex]::Escape($vtUrl))) {
             $newHeader = (Get-Content "dist\release-notes.md" -Raw).Trim()
             $changelog = ""
             if ($currentBody -match '(?s)(\*\*Full Changelog\*\*.*)') {

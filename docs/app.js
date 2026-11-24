@@ -528,7 +528,7 @@
 
   function renderVirusTotal(vt) {
     if (!vt || !vt.url || !vt.summary) return;
-    const scoreMatch = vt.summary.match(/^(\d+)\/(\d+)/);
+    const scoreMatch = vt.summary.match(/^(\d+)\s*\/\s*(\d+)/);
     const shortLabel = scoreMatch ? `${scoreMatch[1]}/${scoreMatch[2]} detections` : vt.summary;
     const heroLabel = scoreMatch ? `${scoreMatch[1]}/${scoreMatch[2]}` : "Verified";
     const flagged = scoreMatch ? parseInt(scoreMatch[1], 10) > 0 : false;
@@ -573,9 +573,11 @@
       .then((r) => (r && r.ok ? r.json() : null))
       .then((rel) => {
         if (!rel || typeof rel.body !== "string") return;
-        const m = rel.body.match(/\*\*VirusTotal[^*]*:\*\*\s*\[([^\]]+)\]\((https:\/\/www\.virustotal\.com\/gui\/file\/[a-f0-9]+)\)/i);
-        if (!m) return;
-        const data = { summary: m[1], url: m[2], tag: rel.tag_name || "" };
+        const tableMatch =
+          rel.body.match(/\|\s*`Bins-Setup-[^`]+`\s*\|\s*`[a-f0-9]+`\s*\|\s*([^|]+?)\s*\|\s*\[View Report\]\((https:\/\/www\.virustotal\.com\/gui\/file\/[a-f0-9]+)\)\s*\|/i) ||
+          rel.body.match(/\*\*VirusTotal[^*]*:\*\*\s*\[([^\]]+)\]\((https:\/\/www\.virustotal\.com\/gui\/file\/[a-f0-9]+)\)/i);
+        if (!tableMatch) return;
+        const data = { summary: tableMatch[1].trim(), url: tableMatch[2], tag: rel.tag_name || "" };
         try {
           sessionStorage.setItem(VT_CACHE_KEY, JSON.stringify({ ts: Date.now(), data }));
         } catch (_) {}
