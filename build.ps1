@@ -76,11 +76,25 @@ if ($Package) {
     }
 
     $setupExe = Join-Path $PSScriptRoot "dist\Bins-Setup-$version-x64.exe"
+    $portableZip = Join-Path $PSScriptRoot "dist\Bins-Portable-$version-x64.zip"
+    if (Test-Path $portableZip) { Remove-Item -Force $portableZip }
+    Compress-Archive -Path @(
+        (Join-Path $PSScriptRoot "bin\Release\Bins.exe"),
+        (Join-Path $PSScriptRoot "app.ico"),
+        (Join-Path $PSScriptRoot "README.md")
+    ) -DestinationPath $portableZip -CompressionLevel Optimal
+
     $hash = (Get-FileHash -Path $setupExe -Algorithm SHA256).Hash
+    $zipHash = (Get-FileHash -Path $portableZip -Algorithm SHA256).Hash
     $shaFile = Join-Path $PSScriptRoot "dist\SHA256SUMS.txt"
-    "$hash  Bins-Setup-$version-x64.exe" | Set-Content -Path $shaFile -Encoding ascii
+    @(
+        "$hash  Bins-Setup-$version-x64.exe"
+        "$zipHash  Bins-Portable-$version-x64.zip"
+    ) | Set-Content -Path $shaFile -Encoding ascii
     Write-Host "Installer built -> $setupExe" -ForegroundColor Green
-    Write-Host "SHA256: $hash" -ForegroundColor Cyan
+    Write-Host "Portable zip   -> $portableZip" -ForegroundColor Green
+    Write-Host "Setup SHA256:    $hash" -ForegroundColor Cyan
+    Write-Host "Portable SHA256: $zipHash" -ForegroundColor Cyan
 }
 
 if ($Run) {

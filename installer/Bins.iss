@@ -26,8 +26,8 @@ OutputDir=..\dist
 OutputBaseFilename=Bins-Setup-{#MyAppVersion}-x64
 SetupIconFile=..\app.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
-Compression=lzma2/ultra64
-SolidCompression=yes
+Compression=zip
+SolidCompression=no
 WizardStyle=modern
 
 [Languages]

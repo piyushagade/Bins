@@ -573,7 +573,7 @@
       .then((r) => (r && r.ok ? r.json() : null))
       .then((rel) => {
         if (!rel || typeof rel.body !== "string") return;
-        const m = rel.body.match(/\*\*VirusTotal:\*\*\s*\[([^\]]+)\]\((https:\/\/www\.virustotal\.com\/gui\/file\/[a-f0-9]+)\)/i);
+        const m = rel.body.match(/\*\*VirusTotal[^*]*:\*\*\s*\[([^\]]+)\]\((https:\/\/www\.virustotal\.com\/gui\/file\/[a-f0-9]+)\)/i);
         if (!m) return;
         const data = { summary: m[1], url: m[2], tag: rel.tag_name || "" };
         try {
