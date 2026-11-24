@@ -277,6 +277,8 @@ namespace WinBins
                     _analyticsService?.TrackFeature("flyout");
             };
 
+            _taskbarManager.IsPopupCurrentlyOpen = () => _popupWindow != null && _popupWindow.IsVisible;
+
             _taskbarManager.BinTaskbarHoverTriggered += (bin, anchorPt, isDragHover) =>
             {
                 _peekWindow?.HidePeek();
@@ -284,6 +286,18 @@ namespace WinBins
                 // when triggered by normal cursor hover, enable auto-dismiss when cursor leaves safe zone.
                 _popupWindow.ShowForBin(bin, anchorPt, openedByHover: true);
                 _analyticsService?.TrackFeature("flyout");
+            };
+
+            _taskbarManager.BinTaskbarHoverSwitchTriggered += (bin, anchorPt) =>
+            {
+                if (_omniSearchWindow != null && _omniSearchWindow.IsVisible)
+                    return;
+
+                _peekWindow?.HidePeek();
+                if (_popupWindow.SwitchToBinOnHover(bin, anchorPt))
+                {
+                    _analyticsService?.TrackFeature("flyout");
+                }
             };
 
             _taskbarManager.BinTaskbarPeekTriggered += (bin, anchorPt) =>

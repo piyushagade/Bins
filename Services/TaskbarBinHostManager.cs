@@ -44,6 +44,12 @@ namespace WinBins.Services
         private int _hoverEnterTick;
         private bool _hoverFiredForCurrentStay;
         private bool _wasLeftButtonDownOutsideTray;
+        private System.Drawing.Point? _activeHoveredBinAnchor;
+        private readonly Win32Interop.WinEventDelegate _tooltipWinEventDelegate;
+        private IntPtr _tooltipShowHook = IntPtr.Zero;
+        private IntPtr _tooltipUncloakHook = IntPtr.Zero;
+        private IntPtr _hookedTrayHwnd = IntPtr.Zero;
+        private uint _hookedTrayPid;
 
         private class HostedBinWindow
         {
@@ -62,7 +68,9 @@ namespace WinBins.Services
 
         public event Action<BinGroup, System.Drawing.Point> BinTaskbarIconClicked;
         public event Action<BinGroup, System.Drawing.Point, bool> BinTaskbarHoverTriggered;
+        public event Action<BinGroup, System.Drawing.Point> BinTaskbarHoverSwitchTriggered;
         public event Action<BinGroup, System.Drawing.Point> BinTaskbarPeekTriggered;
+        public Func<bool> IsPopupCurrentlyOpen { get; set; }
         public event Action TaskbarButtonRectsUpdated;
         public event Action BinClosedFromTaskbar;
         public event Action TaskbarPinStateChanged;
@@ -73,6 +81,8 @@ namespace WinBins.Services
             _iconService = iconService;
             _dispatcher = dispatcher;
             _wndProcDelegate = WndProc;
+            _tooltipWinEventDelegate = OnExplorerTooltipWindowShown;
+            EnsureTooltipWinEventHooks();
 
             _pinSyncDebounceTimer = new DispatcherTimer(DispatcherPriority.Normal, _dispatcher)
             {
@@ -537,6 +547,7 @@ namespace WinBins.Services
                 _wasLeftButtonDownOutsideTray = leftDown;
                 _hoveredBinId = null;
                 _hoverFiredForCurrentStay = false;
+                _activeHoveredBinAnchor = null;
                 return;
             }
 
@@ -578,12 +589,16 @@ namespace WinBins.Services
             {
                 _hoveredBinId = null;
                 _hoverFiredForCurrentStay = false;
+                _activeHoveredBinAnchor = null;
                 return;
             }
 
             var currentBtnAnchor = new System.Drawing.Point(
                 (int)Math.Round(matchedRect.Left + matchedRect.Width / 2.0),
                 (int)Math.Round(matchedRect.Top + matchedRect.Height / 2.0));
+
+            _activeHoveredBinAnchor = currentBtnAnchor;
+            EnsureTooltipWinEventHooks(trayHwnd);
 
             // Always suppress the native Windows 11 taskbar button title tooltip while hovering any Bin icon
             Win32Interop.DismissTaskbarThumbnailWindows(currentBtnAnchor, cancelTrayHoverTooltip: true);
@@ -596,11 +611,15 @@ namespace WinBins.Services
                 return;
             }
 
+            bool popupOpen = IsPopupCurrentlyOpen != null && IsPopupCurrentlyOpen();
+
             if (!_hoverFiredForCurrentStay)
             {
                 int thresholdMs = isDragHoverCandidate
                     ? 340
-                    : (hoverEnabled ? Math.Max(120, _configService.Current?.HoverOpenDelayMs ?? 280) : 260);
+                    : (popupOpen
+                        ? 150
+                        : (hoverEnabled ? Math.Max(120, _configService.Current?.HoverOpenDelayMs ?? 280) : 260));
 
                 if (Math.Abs(Environment.TickCount - _hoverEnterTick) >= thresholdMs)
                 {
@@ -612,7 +631,12 @@ namespace WinBins.Services
                             (int)Math.Round(matchedRect.Left + matchedRect.Width / 2.0),
                             (int)Math.Round(matchedRect.Top + matchedRect.Height / 2.0));
 
-                        if (hoverEnabled || isDragHoverCandidate)
+                        if (popupOpen && !leftDown)
+                        {
+                            Win32Interop.DismissTaskbarThumbnailWindows(anchorPt, cancelTrayHoverTooltip: true);
+                            BinTaskbarHoverSwitchTriggered?.Invoke(bin, anchorPt);
+                        }
+                        else if (hoverEnabled || isDragHoverCandidate)
                         {
                             Win32Interop.DismissTaskbarThumbnailWindows(anchorPt, cancelTrayHoverTooltip: true);
                             BinTaskbarHoverTriggered?.Invoke(bin, anchorPt, isDragHoverCandidate);
@@ -1088,12 +1112,89 @@ namespace WinBins.Services
             return _configService.Current?.Bins?.FirstOrDefault(b => string.Equals(b.Id, id, StringComparison.OrdinalIgnoreCase));
         }
 
+        private void EnsureTooltipWinEventHooks(IntPtr knownTrayHwnd = default)
+        {
+            IntPtr trayHwnd = knownTrayHwnd != IntPtr.Zero
+                ? knownTrayHwnd
+                : Win32Interop.FindWindowExW(IntPtr.Zero, IntPtr.Zero, "Shell_TrayWnd", null);
+            if (trayHwnd == IntPtr.Zero)
+                return;
+
+            Win32Interop.GetWindowThreadProcessId(trayHwnd, out uint trayPid);
+            if (trayPid == 0)
+                return;
+
+            if (_tooltipShowHook != IntPtr.Zero && _hookedTrayPid == trayPid && _hookedTrayHwnd == trayHwnd)
+                return;
+
+            UnhookTooltipWinEventHooks();
+            _hookedTrayHwnd = trayHwnd;
+            _hookedTrayPid = trayPid;
+
+            uint flags = Win32Interop.WINEVENT_OUTOFCONTEXT | Win32Interop.WINEVENT_SKIPOWNPROCESS;
+            _tooltipShowHook = Win32Interop.SetWinEventHook(
+                Win32Interop.EVENT_OBJECT_SHOW,
+                Win32Interop.EVENT_OBJECT_SHOW,
+                IntPtr.Zero,
+                _tooltipWinEventDelegate,
+                trayPid,
+                0,
+                flags);
+
+            _tooltipUncloakHook = Win32Interop.SetWinEventHook(
+                Win32Interop.EVENT_OBJECT_UNCLOAKED,
+                Win32Interop.EVENT_OBJECT_UNCLOAKED,
+                IntPtr.Zero,
+                _tooltipWinEventDelegate,
+                trayPid,
+                0,
+                flags);
+        }
+
+        private void UnhookTooltipWinEventHooks()
+        {
+            if (_tooltipShowHook != IntPtr.Zero)
+            {
+                try { Win32Interop.UnhookWinEvent(_tooltipShowHook); } catch { }
+                _tooltipShowHook = IntPtr.Zero;
+            }
+            if (_tooltipUncloakHook != IntPtr.Zero)
+            {
+                try { Win32Interop.UnhookWinEvent(_tooltipUncloakHook); } catch { }
+                _tooltipUncloakHook = IntPtr.Zero;
+            }
+            _hookedTrayHwnd = IntPtr.Zero;
+            _hookedTrayPid = 0;
+        }
+
+        private void OnExplorerTooltipWindowShown(
+            IntPtr hWinEventHook,
+            uint eventType,
+            IntPtr hwnd,
+            int idObject,
+            int idChild,
+            uint dwEventThread,
+            uint dwmsEventTime)
+        {
+            if (idObject != Win32Interop.OBJID_WINDOW || idChild != 0 || hwnd == IntPtr.Zero)
+                return;
+
+            System.Drawing.Point? anchor = _activeHoveredBinAnchor;
+            if (!anchor.HasValue || _hookedTrayPid == 0)
+                return;
+
+            Win32Interop.GetWindowRect(_hookedTrayHwnd, out Win32Interop.RECT trayRect);
+            Win32Interop.TryDismissIfTaskbarTooltipWindow(hwnd, _hookedTrayHwnd, _hookedTrayPid, trayRect, anchor);
+        }
+
         public void Dispose()
         {
             _pinSyncDebounceTimer.Stop();
             _pinFollowUpTimer.Stop();
             _taskbandStampTimer.Stop();
             _hoverMonitorTimer.Stop();
+            _activeHoveredBinAnchor = null;
+            UnhookTooltipWinEventHooks();
 
             if (_displaySettingsChangedHandler != null)
             {

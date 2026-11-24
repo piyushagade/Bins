@@ -120,6 +120,7 @@ namespace WinBins.Interop
         public const uint EVENT_SYSTEM_SWITCHEND = 0x0015;
         public const uint EVENT_SYSTEM_MINIMIZEEND = 0x0017;
         public const uint EVENT_OBJECT_SHOW = 0x8002;
+        public const uint EVENT_OBJECT_UNCLOAKED = 0x8018;
         public const uint WINEVENT_OUTOFCONTEXT = 0x0000;
         public const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
         public const int OBJID_WINDOW = 0;
@@ -2441,72 +2442,96 @@ namespace WinBins.Interop
 
             EnumWindows((h, _) =>
             {
-                if (h == IntPtr.Zero || h == trayHwnd || !IsWindowVisible(h) || IsWindowCloaked(h))
-                    return true;
-
-                GetWindowThreadProcessId(h, out uint pid);
-                if (pid != trayPid)
-                    return true;
-
-                string cls = GetWindowClassNameSafe(h);
-                if (string.IsNullOrEmpty(cls) ||
-                    string.Equals(cls, "Shell_TrayWnd", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(cls, "Shell_SecondaryTrayWnd", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(cls, "Progman", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(cls, "WorkerW", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(cls, "CabinetWClass", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(cls, "MultitaskingViewFrame", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(cls, "MSTaskSwWClass", StringComparison.OrdinalIgnoreCase))
+                if (TryDismissIfTaskbarTooltipWindow(h, trayHwnd, trayPid, trayRect, anchorPx))
                 {
-                    return true;
-                }
-
-                if (string.Equals(cls, "TaskListThumbnailWnd", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(cls, "tooltips_class32", StringComparison.OrdinalIgnoreCase))
-                {
-                    ShowWindow(h, SW_HIDE);
                     dismissedAny = true;
-                    return true;
                 }
-
-                // Windows 11 XAML Taskbar button text tooltips (PopupHost / XamlExplorerHostIslandWindow / PopupWindowSiteBridge)
-                // have small tooltip dimensions positioned right above/beside the hovered taskbar icon.
-                bool isKnownIslandPopup =
-                    cls.IndexOf("Popup", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    cls.IndexOf("Island", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    cls.IndexOf("Bridge", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    string.Equals(cls, "Windows.UI.Core.CoreWindow", StringComparison.OrdinalIgnoreCase);
-
-                if ((isKnownIslandPopup || GetWindowTextLengthW(h) == 0) && GetWindowRect(h, out RECT r))
-                {
-                    int w = r.Right - r.Left;
-                    int ht = r.Bottom - r.Top;
-                    if (w >= 16 && w <= 480 && ht >= 16 && ht <= 115)
-                    {
-                        bool nearTarget;
-                        if (anchorPx.HasValue)
-                        {
-                            int cx = (r.Left + r.Right) / 2;
-                            int cy = (r.Top + r.Bottom) / 2;
-                            nearTarget = Math.Abs(cx - anchorPx.Value.X) <= 220 && Math.Abs(cy - anchorPx.Value.Y) <= 180;
-                        }
-                        else
-                        {
-                            nearTarget = r.Bottom >= trayRect.Top - 150 && r.Top <= trayRect.Bottom + 150;
-                        }
-
-                        if (nearTarget)
-                        {
-                            ShowWindow(h, SW_HIDE);
-                            dismissedAny = true;
-                        }
-                    }
-                }
-
                 return true;
             }, IntPtr.Zero);
 
             return dismissedAny;
+        }
+
+        /// <summary>
+        /// Immediately hides a single HWND if it belongs to explorer.exe's taskbar process and matches
+        /// a native taskbar thumbnail/tooltip or Windows 11 XAML taskbar title tooltip near the hovered Bin.
+        /// Used both by EnumWindows sweeps and event-driven EVENT_OBJECT_SHOW / EVENT_OBJECT_UNCLOAKED hooks.
+        /// </summary>
+        public static bool TryDismissIfTaskbarTooltipWindow(
+            IntPtr h,
+            IntPtr trayHwnd,
+            uint trayPid,
+            RECT trayRect,
+            System.Drawing.Point? anchorPx)
+        {
+            if (h == IntPtr.Zero || h == trayHwnd || trayPid == 0 || !IsWindowVisible(h) || IsWindowCloaked(h))
+                return false;
+
+            GetWindowThreadProcessId(h, out uint pid);
+            if (pid != trayPid)
+                return false;
+
+            string cls = GetWindowClassNameSafe(h);
+            if (string.IsNullOrEmpty(cls) ||
+                string.Equals(cls, "Shell_TrayWnd", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cls, "Shell_SecondaryTrayWnd", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cls, "Progman", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cls, "WorkerW", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cls, "CabinetWClass", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cls, "MultitaskingViewFrame", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cls, "MSTaskSwWClass", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (string.Equals(cls, "TaskListThumbnailWnd", StringComparison.OrdinalIgnoreCase))
+            {
+                ShowWindow(h, SW_HIDE);
+                PostMessageW(h, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+                return true;
+            }
+
+            if (string.Equals(cls, "tooltips_class32", StringComparison.OrdinalIgnoreCase))
+            {
+                ShowWindow(h, SW_HIDE);
+                return true;
+            }
+
+            // Windows 11 XAML Taskbar button text tooltips (PopupHost / XamlExplorerHostIslandWindow / PopupWindowSiteBridge)
+            // have small tooltip dimensions positioned right above/beside the hovered taskbar icon.
+            bool isKnownIslandPopup =
+                cls.IndexOf("Popup", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                cls.IndexOf("Island", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                cls.IndexOf("Bridge", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                string.Equals(cls, "Windows.UI.Core.CoreWindow", StringComparison.OrdinalIgnoreCase);
+
+            if ((isKnownIslandPopup || GetWindowTextLengthW(h) == 0) && GetWindowRect(h, out RECT r))
+            {
+                int w = r.Right - r.Left;
+                int ht = r.Bottom - r.Top;
+                if (w >= 16 && w <= 480 && ht >= 16 && ht <= 115)
+                {
+                    bool nearTarget;
+                    if (anchorPx.HasValue)
+                    {
+                        int cx = (r.Left + r.Right) / 2;
+                        int cy = (r.Top + r.Bottom) / 2;
+                        nearTarget = Math.Abs(cx - anchorPx.Value.X) <= 220 && Math.Abs(cy - anchorPx.Value.Y) <= 180;
+                    }
+                    else
+                    {
+                        nearTarget = r.Bottom >= trayRect.Top - 150 && r.Top <= trayRect.Bottom + 150;
+                    }
+
+                    if (nearTarget)
+                    {
+                        ShowWindow(h, SW_HIDE);
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         public static bool IsWindowCloaked(IntPtr hwnd)

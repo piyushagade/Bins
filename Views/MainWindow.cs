@@ -2625,9 +2625,20 @@ namespace WinBins.Views
             {
                 new ReleaseNotesEntry
                 {
+                    Version = "v1.5.14",
+                    Headline = "Instant Taskbar Tooltip Suppression & Portable ZIP Releases",
+                    IsLatest = true,
+                    Highlights = new[]
+                    {
+                        "Upgraded Windows 11 taskbar tooltip & thumbnail suppression to event-driven hooks (EVENT_OBJECT_SHOW / EVENT_OBJECT_UNCLOAKED) for instant, flicker-free flyouts and hover peeks.",
+                        "Added Portable ZIP releases alongside the Inno Setup installer, with both artifacts automatically scanned by VirusTotal."
+                    }
+                },
+                new ReleaseNotesEntry
+                {
                     Version = "v1.5.13",
                     Headline = "Crisper Tile Spacing & Automated VirusTotal Verification",
-                    IsLatest = true,
+                    IsLatest = false,
                     Highlights = new[]
                     {
                         "Preserved a crisp 5 px minimum gutter between adjacent flyout tiles even at 0 px item padding, with tighter outer flyout margins.",

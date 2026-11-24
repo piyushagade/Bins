@@ -97,6 +97,28 @@ namespace WinBins.Views
 
         public string CurrentBinId => _currentBin?.Id;
 
+        public bool IsBusyForHoverSwitch =>
+            _suppressDeactivateClose ||
+            _activeContextMenuCount > 0 ||
+            _isPinnedOpen ||
+            !string.IsNullOrEmpty(_filterText);
+
+        /// <summary>
+        /// Smoothly switches an already-open flyout to another Bin when the user glides over another
+        /// Bin's taskbar icon, preserving whether the flyout was click-opened or hover-opened.
+        /// </summary>
+        public bool SwitchToBinOnHover(BinGroup bin, System.Drawing.Point anchorScreenPx)
+        {
+            if (!IsVisible || bin == null || IsBusyForHoverSwitch)
+                return false;
+
+            if (string.Equals(_currentBin?.Id, bin.Id, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            ShowForBin(bin, anchorScreenPx, openedByHover: _openedByHover);
+            return true;
+        }
+
         private bool IsKeepOpenMode =>
             _isPinnedOpen || !(_configService.Current?.ClosePopupOnLaunch ?? true);
 
