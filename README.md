@@ -9,6 +9,7 @@
 [![Latest Release](https://img.shields.io/github/v/release/piyushagade/Bins?style=flat-square&logo=github)](https://github.com/piyushagade/Bins/releases/latest)
 [![Platform](https://img.shields.io/badge/Windows-11%20%28x64%29-0078D6?style=flat-square&logo=windows)](https://github.com/piyushagade/Bins/releases/latest)
 [![.NET 4.8](https://img.shields.io/static/v1?label=.NET&message=4.8%20%7C%20WPF&color=512BD4&style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
+[![VirusTotal](https://img.shields.io/static/v1?label=VirusTotal&message=Scanned&color=10B981&style=flat-square&logo=virustotal&logoColor=white)](https://github.com/piyushagade/Bins/releases/latest)
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-orange?style=flat-square)](LICENSE)
 
 *Built natively in C# on `WPF` and Win32 / DWM / Shell COM Interop with **zero third-party dependencies**.*

@@ -161,6 +161,8 @@ jobs:
             $harmless = [int]$stats.harmless
             $total = $malicious + $suspicious + $undetected + $harmless
             $summary = "$malicious/$total engines flagged as malicious ($suspicious suspicious)"
+            $badgeMsg = if ($malicious -eq 0) { "0/$total clean" } else { "$malicious/$total flagged" }
+            $badgeColor = if ($malicious -eq 0) { "10B981" } else { "F59E0B" }
             Write-Host "VirusTotal scan completed: $summary"
             Write-Host "Report URL: $reportUrl"
             if ($malicious -gt 0) {
@@ -168,8 +170,17 @@ jobs:
             }
           } else {
             $summary = "Scan still in progress (status: $status)"
+            $badgeMsg = "scanning"
+            $badgeColor = "0078D6"
             Write-Warning "VirusTotal scan did not finish within timeout. Check report: $reportUrl"
           }
+
+          @{
+            schemaVersion = 1
+            label         = "VirusTotal"
+            message       = $badgeMsg
+            color         = $badgeColor
+          } | ConvertTo-Json -Compress | Set-Content -Path "dist\virustotal-badge.json" -Encoding utf8
 
           "summary=$summary" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "report_url=$reportUrl" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
@@ -224,3 +235,4 @@ jobs:
             dist/Bins-Setup-${{ steps.version.outputs.value }}-x64.exe
             dist/SHA256SUMS.txt
             dist/PiyushAgade.Bins.yaml
+            dist/virustotal-badge.json
