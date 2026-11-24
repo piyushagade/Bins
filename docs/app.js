@@ -513,6 +513,80 @@
     });
   });
 
+  // --------------------------------------------------------------------------
+  // Live VirusTotal Scan Badge (from latest GitHub Release notes)
+  // --------------------------------------------------------------------------
+  const VT_CACHE_KEY = "bins-vt-latest-v1";
+  const VT_CACHE_TTL_MS = 10 * 60 * 1000;
+  const heroVtWrap = document.getElementById("heroVtWrap");
+  const heroVtLink = document.getElementById("heroVtLink");
+  const heroVtScore = document.getElementById("heroVtScore");
+  const vtPill = document.getElementById("vtPill");
+  const vtDot = document.getElementById("vtDot");
+  const vtText = document.getElementById("vtText");
+  const footerVtLink = document.getElementById("footerVtLink");
+
+  function renderVirusTotal(vt) {
+    if (!vt || !vt.url || !vt.summary) return;
+    const scoreMatch = vt.summary.match(/^(\d+)\/(\d+)/);
+    const shortLabel = scoreMatch ? `${scoreMatch[1]}/${scoreMatch[2]} detections` : vt.summary;
+    const heroLabel = scoreMatch ? `${scoreMatch[1]}/${scoreMatch[2]}` : "Verified";
+    const flagged = scoreMatch ? parseInt(scoreMatch[1], 10) > 0 : false;
+
+    if (vtPill) {
+      vtPill.href = vt.url;
+      vtPill.title = `VirusTotal scan (${vt.tag || "latest"}): ${vt.summary}`;
+      vtPill.hidden = false;
+    }
+    if (vtText) vtText.textContent = shortLabel;
+    if (vtDot) vtDot.classList.toggle("warn", flagged);
+
+    if (heroVtLink) {
+      heroVtLink.href = vt.url;
+      heroVtLink.title = `VirusTotal scan: ${vt.summary}`;
+    }
+    if (heroVtScore) heroVtScore.textContent = heroLabel;
+    if (heroVtWrap) heroVtWrap.hidden = false;
+
+    if (footerVtLink) footerVtLink.href = vt.url;
+  }
+
+  (function loadVirusTotalBadge() {
+    if (typeof fetch !== "function") return;
+    try {
+      const cachedRaw = sessionStorage.getItem(VT_CACHE_KEY);
+      if (cachedRaw) {
+        const cached = JSON.parse(cachedRaw);
+        if (cached && Date.now() - cached.ts < VT_CACHE_TTL_MS && cached.data) {
+          renderVirusTotal(cached.data);
+          return;
+        }
+      }
+    } catch (_) {}
+
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 5000) : null;
+    fetch("https://api.github.com/repos/piyushagade/Bins/releases/latest", {
+      headers: { Accept: "application/vnd.github+json" },
+      ...(controller ? { signal: controller.signal } : {})
+    })
+      .then((r) => (r && r.ok ? r.json() : null))
+      .then((rel) => {
+        if (!rel || typeof rel.body !== "string") return;
+        const m = rel.body.match(/\*\*VirusTotal:\*\*\s*\[([^\]]+)\]\((https:\/\/www\.virustotal\.com\/gui\/file\/[a-f0-9]+)\)/i);
+        if (!m) return;
+        const data = { summary: m[1], url: m[2], tag: rel.tag_name || "" };
+        try {
+          sessionStorage.setItem(VT_CACHE_KEY, JSON.stringify({ ts: Date.now(), data }));
+        } catch (_) {}
+        renderVirusTotal(data);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (timer) clearTimeout(timer);
+      });
+  })();
+
   // Initial render
   renderFlyout();
 })();

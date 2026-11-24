@@ -298,6 +298,55 @@ kbd {
   background: var(--accent);
 }
 
+.vt-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  text-decoration: none;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.vt-pill[hidden] {
+  display: none;
+}
+
+.vt-pill:hover {
+  border-color: var(--border-strong, var(--accent));
+  color: var(--text);
+}
+
+.vt-pill strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.vt-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10B981;
+}
+
+.vt-dot.warn {
+  background: #F59E0B;
+}
+
+.vt-inline-link {
+  color: inherit;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.vt-inline-link:hover {
+  color: var(--text);
+}
+
 /* ==========================================================================
    Interactive Windows 11 Stage
    ========================================================================== */
