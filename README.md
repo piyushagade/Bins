@@ -1,14 +1,24 @@
-<img width="96" height="96" alt="app-icon" src="https://github.com/user-attachments/assets/a29b0206-3e7a-485c-93b2-1de2a6f37034" />
+<div align="center">
 
-# Bins for Windows 11
+<img width="112" height="112" alt="Bins" src="https://github.com/user-attachments/assets/a29b0206-3e7a-485c-93b2-1de2a6f37034" />
 
-**Native grouped taskbar icon launcher for Windows 11.**
+# Bins
+
+**A native Windows 11 grouped taskbar icon launcher with Fluent mosaic Bins.**
+
+![Windows 11 (x64)](https://img.shields.io/badge/Windows-11%20(x64)-0078D4?style=flat-square)
+![.NET 4.8 | WPF](https://img.shields.io/badge/.NET-4.8%20%7C%20WPF-512BD4?style=flat-square&logo=dotnet&logoColor=white)
+![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-EA6A1F?style=flat-square)
+
+*Built natively in C# on `WPF` and Win32 / DWM / Shell COM Interop with **zero third-party dependencies**.*
+
+[Download Latest Release](https://github.com/piyushagade/Bins/releases/latest) · [Website](https://app.piyushagade.xyz/bins/) · [Features](#features) · [Build from Source](#building-from-source) · [Privacy](analytics.md) · [License](#license)
+
+</div>
+
+---
 
 Organize apps, Microsoft Store apps, folders, websites, Smart Live Folders, quick text snippets, and system utilities into crisp Fluent mosaic **Bins** pinned directly to your Windows 11 taskbar.
-
-Built in pure **C#**, **WPF** (WinUI 3 Dark / Light / System Fluent styling), and **Win32 / DWM / Shell COM Interop** — lightweight, native, and with **zero third-party NuGet dependencies**.
-
-[Website](https://app.piyushagade.xyz/bins/) · [Releases](https://github.com/piyushagade/Bins/releases) · [Report an Issue](https://github.com/piyushagade/Bins/issues) · [Privacy & Analytics](analytics.md)
 
 ---
 
