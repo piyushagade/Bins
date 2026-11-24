@@ -2625,9 +2625,20 @@ namespace WinBins.Views
             {
                 new ReleaseNotesEntry
                 {
+                    Version = "v1.5.13",
+                    Headline = "Crisper Tile Spacing & Automated VirusTotal Verification",
+                    IsLatest = true,
+                    Highlights = new[]
+                    {
+                        "Preserved a crisp 5 px minimum gutter between adjacent flyout tiles even at 0 px item padding, with tighter outer flyout margins.",
+                        "Added automated VirusTotal scanning on every GitHub release with public scan reports included in release notes."
+                    }
+                },
+                new ReleaseNotesEntry
+                {
                     Version = "v1.5.12",
                     Headline = "Icon-Only Tiles & Taskbar-Centered Flyouts",
-                    IsLatest = true,
+                    IsLatest = false,
                     Highlights = new[]
                     {
                         "Added an Item labels toggle per Bin to hide text labels inside the flyout for a clean icon-only grid (hover tooltips still show item names).",

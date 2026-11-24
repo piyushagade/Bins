@@ -953,7 +953,7 @@ namespace WinBins.Views
             }
 
             int pad = Math.Max(0, Math.Min(20, _currentBin.ItemPadding));
-            double outerSide = Math.Max(6, 6 + pad * 0.6);
+            double outerSide = Math.Max(4, 4 + pad * 0.6);
 
             _itemsGrid.Children.Clear();
             _contentHostStack.Children.Clear();
@@ -1196,7 +1196,8 @@ namespace WinBins.Views
                 iconLabelGap = 0;
                 labelMaxH = 0;
             }
-            double marginHalf = Math.Round(pad / 2.0, 1);
+            // Always preserve a crisp minimum visual gutter (5 px) between adjacent tiles even at 0 px padding
+            double marginHalf = Math.Round(2.5 + pad / 2.0, 1);
             double fullRowHeight = tileH + marginHalf * 2.0;
 
             if (_currentBin.MaxRows > 0)
