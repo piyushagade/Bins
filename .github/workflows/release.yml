@@ -236,3 +236,25 @@ jobs:
             dist/SHA256SUMS.txt
             dist/PiyushAgade.Bins.yaml
             dist/virustotal-badge.json
+
+      - name: Ensure release body includes latest Verification & VirusTotal
+        if: github.ref_type == 'tag' || inputs.create_release == true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ steps.version.outputs.tag }}"
+          $vtUrl = "${{ steps.virustotal.outputs.report_url }}"
+          if ([string]::IsNullOrWhiteSpace($vtUrl)) { exit 0 }
+
+          $currentBody = gh release view $tag --json body --jq .body
+          if ($currentBody -notmatch [regex]::Escape($vtUrl)) {
+            $newHeader = Get-Content "dist\release-notes.md" -Raw
+            $changelog = ""
+            if ($currentBody -match '(?s)(\*\*Full Changelog\*\*.*)') {
+              $changelog = "`n`n" + $Matches[1].Trim()
+            }
+            $merged = $newHeader.Trim() + $changelog
+            $merged | Set-Content -Path "dist\release-notes-final.md" -Encoding utf8
+            gh release edit $tag --notes-file "dist\release-notes-final.md"
+          }
