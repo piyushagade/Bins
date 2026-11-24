@@ -1,3 +1,5 @@
+<img width="96" height="96" alt="app-icon" src="https://github.com/user-attachments/assets/a29b0206-3e7a-485c-93b2-1de2a6f37034" />
+
 # Bins for Windows 11
 
 **Native grouped taskbar icon launcher for Windows 11.**
