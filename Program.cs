@@ -186,6 +186,8 @@ namespace WinBins
         private RunningAppsTaskbarManager _runningAppsManager;
         private TaskbarIndicatorOverlayManager _indicatorOverlayManager;
         private GlobalHotkeyManager _hotkeyManager;
+        private ShelfTriggerManager _shelfTriggerManager;
+        private ShelfWindow _shelfWindow;
         private BinPopupWindow _popupWindow;
         private BinRunningPeekWindow _peekWindow;
         private OmniSearchWindow _omniSearchWindow;
@@ -253,6 +255,7 @@ namespace WinBins
             _runningAppsManager = new RunningAppsTaskbarManager(_configService, Dispatcher);
             _indicatorOverlayManager = new TaskbarIndicatorOverlayManager(_configService, _taskbarManager, _runningAppsManager, Dispatcher);
             _hotkeyManager = new GlobalHotkeyManager();
+            _shelfTriggerManager = new ShelfTriggerManager(Dispatcher);
 
             _popupWindow = new BinPopupWindow(
                 _configService,
@@ -264,7 +267,8 @@ namespace WinBins
                 {
                     _taskbarManager.RefreshBin(bin);
                     _runningAppsManager.SyncRunningWindows();
-                    _hotkeyManager.SyncHotkeys(_configService.Current?.Bins, _configService.Current?.GlobalSearchHotkey);
+                    _hotkeyManager.SyncHotkeys(_configService.Current?.Bins, _configService.Current?.GlobalSearchHotkey, _configService.Current?.ShelfHotkey);
+                    _shelfTriggerManager.Sync(_configService.Current);
                     _mainWindow?.RefreshFullUi();
                     RebuildTrayMenu();
                 });
@@ -331,10 +335,34 @@ namespace WinBins
                 {
                     _peekWindow?.HidePeek();
                     _popupWindow?.HidePopup();
+                    _shelfWindow?.CloseEntireCascade();
                     EnsureOmniSearchWindow().ToggleSearch();
                     if (_omniSearchWindow != null && _omniSearchWindow.IsVisible)
                         _analyticsService?.TrackFeature("omnisearch");
                 }));
+            };
+
+            _hotkeyManager.ShelfHotkeyPressed += () =>
+            {
+                Dispatcher.BeginInvoke(new Action(() => ToggleShelfAtCursor()));
+            };
+
+            _shelfTriggerManager.MouseTriggered += (x, y) =>
+            {
+                ToggleShelfAtPoint(x, y);
+            };
+
+            _shelfTriggerManager.IsPointInsideOpenShelf = (x, y) =>
+                _shelfWindow != null && _shelfWindow.IsVisible && _shelfWindow.ContainsPhysicalPoint(x, y);
+
+            _shelfTriggerManager.ClickedOutsideShelf += () =>
+            {
+                if ((_configService.Current?.ShelfCloseOnClickOutside ?? true) &&
+                    _shelfWindow != null && _shelfWindow.IsVisible)
+                {
+                    _shelfWindow.CloseEntireCascade();
+                    _shelfWindow = null;
+                }
             };
 
             _taskbarManager.BinClosedFromTaskbar += () =>
@@ -353,7 +381,8 @@ namespace WinBins
             _taskbarManager.SyncAllBins();
             _runningAppsManager.SyncRunningWindows();
             _indicatorOverlayManager.SyncIndicators();
-            _hotkeyManager.SyncHotkeys(_configService.Current?.Bins, _configService.Current?.GlobalSearchHotkey);
+            _hotkeyManager.SyncHotkeys(_configService.Current?.Bins, _configService.Current?.GlobalSearchHotkey, _configService.Current?.ShelfHotkey);
+            _shelfTriggerManager.Sync(_configService.Current);
             InitializeSystemTray();
             StartIpcServer();
 
@@ -395,6 +424,43 @@ namespace WinBins
             return _omniSearchWindow;
         }
 
+        private void ToggleShelfAtCursor()
+        {
+            Win32Interop.GetCursorPos(out Win32Interop.POINT pt);
+            ToggleShelfAtPoint(pt.X, pt.Y);
+        }
+
+        private void ToggleShelfAtPoint(int physicalX, int physicalY)
+        {
+            if (_shelfWindow != null && _shelfWindow.IsVisible)
+            {
+                _shelfWindow.CloseEntireCascade();
+                _shelfWindow = null;
+                return;
+            }
+
+            _peekWindow?.HidePeek();
+            _popupWindow?.HidePopup();
+            _omniSearchWindow?.HideSearch();
+
+            var shelf = new ShelfWindow(
+                _configService,
+                _iconService,
+                onOpenSettings: () => ShowManager(null));
+            shelf.Closed += (_, __) =>
+            {
+                if (ReferenceEquals(_shelfWindow, shelf))
+                {
+                    _shelfWindow = null;
+                    _shelfTriggerManager?.SetShelfOpen(false);
+                }
+            };
+            _shelfWindow = shelf;
+            _shelfTriggerManager?.SetShelfOpen(true);
+            shelf.ShowAtCursor(physicalX, physicalY);
+            _analyticsService?.TrackFeature("shelf");
+        }
+
         private MainWindow EnsureMainWindow()
         {
             if (_mainWindow == null)
@@ -411,7 +477,11 @@ namespace WinBins
                         EnsureOmniSearchWindow().ShowSearch();
                         _analyticsService?.TrackFeature("omnisearch");
                     },
-                    updateCheckService: _updateCheckService);
+                    updateCheckService: _updateCheckService,
+                    onShelfConfigChanged: () =>
+                    {
+                        _shelfTriggerManager?.Sync(_configService.Current);
+                    });
 
                 win.IsVisibleChanged += (_, __) => _indicatorOverlayManager?.NotifyTaskbarLayoutShifted();
                 win.Closed += (_, __) =>
@@ -614,6 +684,10 @@ namespace WinBins
                 menu.Items.Add(profileMenu);
                 menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
             }
+
+            var shelfTrayItem = new System.Windows.Forms.ToolStripMenuItem("Open Shelf");
+            shelfTrayItem.Click += (_, __) => Dispatcher.BeginInvoke(new Action(ToggleShelfAtCursor));
+            menu.Items.Add(shelfTrayItem);
 
             var searchTrayItem = new System.Windows.Forms.ToolStripMenuItem("Search All Bins...");
             searchTrayItem.Click += (_, __) => Dispatcher.BeginInvoke(new Action(() =>
@@ -891,6 +965,7 @@ namespace WinBins
 
             _updateCheckService?.Dispose();
             _analyticsService?.Dispose();
+            _shelfTriggerManager?.Dispose();
             _hotkeyManager?.Dispose();
             _indicatorOverlayManager?.Dispose();
             _runningAppsManager?.Dispose();
@@ -900,6 +975,11 @@ namespace WinBins
             if (_peekWindow != null)
             {
                 _peekWindow.Close();
+            }
+
+            if (_shelfWindow != null)
+            {
+                _shelfWindow.CloseEntireCascade();
             }
 
             if (_omniSearchWindow != null)

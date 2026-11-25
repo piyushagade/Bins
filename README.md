@@ -51,7 +51,8 @@ Organize apps, Microsoft Store apps, folders, websites, Smart Live Folders, quic
 - **Keep Open Apps Inside Their Bin:** Pin any Bin on the Windows 11 taskbar (`System.AppUserModel.ID` + `ICustomDestinationList`) and optionally keep open binned apps grouped inside their Bin while preserving `Alt+Tab`, `Win+Tab`, and Snap Assist.
 - **Drag-and-Drop Workflows:** Drag and drop files directly onto App, Folder, or Recycle Bin tiles, reorder tiles freely, or drag items between Bins.
 
-### Omni-Search, Hotkeys, Profiles & Power Tools
+### Omni-Search, Shelf, Hotkeys, Profiles & Power Tools
+- **Cursor-Triggered Shelf Launcher:** Pop open a Fluent launcher menu anywhere under your pointer via Middle-click / Mouse 4 / Mouse 5 (with optional Ctrl/Alt/Shift modifiers) or a global hotkey, featuring cascading vertical **List** mode, compact **Grid** mode, and customizable per-Bin placement (**Submenu**, **Top-level**, or **Bottom Bar**).
 - **Global Cross-Bin Omni-Search (`Ctrl+Alt+Space`):** Spotlight-style launcher that searches across all Bins and Smart Live Folders from anywhere.
 - **Keyboard Navigation & Hover Mode:** Per-Bin global hotkeys, flyout keyboard shortcuts (`1`–`9`, `Tab`, arrow keys, inline filter), and optional **Hover-to-Open**.
 - **Bin Profiles:** Save and switch taskbar Bin layouts (*Work*, *Dev*, *Gaming*, *All Bins*) in one click from Settings, the System Tray, or CLI (`Bins.exe --profile <name>`).

@@ -37,6 +37,7 @@ namespace WinBins.Views
         private enum WorkspacePane
         {
             Bin,
+            Shelf,
             Donate,
             Settings,
             WhatsNew,
@@ -50,9 +51,13 @@ namespace WinBins.Views
         private string _editingItemId;
         private bool _isRecordingHotkey;
         private bool _isRecordingGlobalSearchHotkey;
+        private bool _isRecordingShelfHotkey;
+        private readonly Action _onShelfConfigChanged;
 
         // Sidebar controls
         private StackPanel _binsListPanel;
+        private Border _shelfNavRow;
+        private Border _shelfNavPill;
         private Border _donateNavRow;
         private Border _donateNavPill;
         private Border _settingsNavRow;
@@ -64,6 +69,8 @@ namespace WinBins.Views
 
         // Right sheet views
         private Grid _binWorkspaceView;
+        private ScrollViewer _shelfView;
+        private StackPanel _shelfBinsListPanel;
         private ScrollViewer _donateView;
         private ScrollViewer _settingsView;
         private ScrollViewer _whatsNewView;
@@ -178,6 +185,24 @@ namespace WinBins.Views
         private CheckBox _startupToggle;
         private CheckBox _showPinGuideToggle;
         private CheckBox _sendDiagnosticsToggle;
+        private CheckBox _addToShelfToggle;
+        private CheckBox _shelfShowAtRootToggle;
+        private CheckBox _shelfEnabledToggle;
+        private StackPanel _shelfConfigContainer;
+        private ComboBox _shelfMouseCombo;
+        private CheckBox _shelfCtrlCheck;
+        private CheckBox _shelfAltCheck;
+        private CheckBox _shelfShiftCheck;
+        private Button _shelfHotkeyBtn;
+        private TextBlock _shelfHotkeyLabel;
+        private Button _clearShelfHotkeyBtn;
+        private CheckBox _shelfCloseOnLaunchToggle;
+        private CheckBox _shelfCloseOnClickOutsideToggle;
+        private ComboBox _shelfBottomColsCombo;
+        private ComboBox _shelfBottomRowsCombo;
+        private ComboBox _shelfBottomIconSizeCombo;
+        private ComboBox _shelfBottomDensityCombo;
+        private CheckBox _shelfBottomLabelsToggle;
         private TextBlock _syncFolderStatusText;
         private Button _resetSyncFolderBtn;
         private TextBlock _aboutDataFolderPathText;
@@ -199,7 +224,8 @@ namespace WinBins.Views
             RunningAppsTaskbarManager runningAppsManager = null,
             GlobalHotkeyManager hotkeyManager = null,
             Action onOpenSearch = null,
-            UpdateCheckService updateCheckService = null)
+            UpdateCheckService updateCheckService = null,
+            Action onShelfConfigChanged = null)
         {
             _configService = configService;
             _iconService = iconService;
@@ -210,6 +236,7 @@ namespace WinBins.Views
             _hotkeyManager = hotkeyManager;
             _onOpenSearch = onOpenSearch;
             _updateCheckService = updateCheckService;
+            _onShelfConfigChanged = onShelfConfigChanged;
 
             Title = "Bins";
             Icon = IconService.GetAppIconBitmapSource();
@@ -273,11 +300,51 @@ namespace WinBins.Views
 
         private void SyncAllHotkeys()
         {
-            _hotkeyManager?.SyncHotkeys(_configService.Current?.Bins, _configService.Current?.GlobalSearchHotkey);
+            _hotkeyManager?.SyncHotkeys(
+                _configService.Current?.Bins,
+                _configService.Current?.GlobalSearchHotkey,
+                _configService.Current?.ShelfHotkey);
         }
 
         private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
         {
+            if (_isRecordingShelfHotkey && _configService.Current != null)
+            {
+                Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+                if (key == Key.Escape)
+                {
+                    _isRecordingShelfHotkey = false;
+                    RefreshFullUi();
+                    e.Handled = true;
+                    return;
+                }
+
+                if ((key == Key.Back || key == Key.Delete) && Keyboard.Modifiers == ModifierKeys.None)
+                {
+                    _isRecordingShelfHotkey = false;
+                    _configService.Current.ShelfHotkey = string.Empty;
+                    _configService.Save(notify: false);
+                    SyncAllHotkeys();
+                    _onShelfConfigChanged?.Invoke();
+                    RefreshFullUi();
+                    e.Handled = true;
+                    return;
+                }
+
+                string formatted = GlobalHotkeyManager.FormatHotkey(Keyboard.Modifiers, key);
+                if (!string.IsNullOrEmpty(formatted))
+                {
+                    _isRecordingShelfHotkey = false;
+                    _configService.Current.ShelfHotkey = formatted;
+                    _configService.Save(notify: false);
+                    SyncAllHotkeys();
+                    _onShelfConfigChanged?.Invoke();
+                    RefreshFullUi();
+                }
+                e.Handled = true;
+                return;
+            }
+
             if (_isRecordingGlobalSearchHotkey && _configService.Current != null)
             {
                 Key key = e.Key == Key.System ? e.SystemKey : e.Key;
@@ -523,6 +590,62 @@ namespace WinBins.Views
                     {
                         _showPinGuideToggle.IsChecked = !_configService.Current.HidePinToTaskbarPrompt;
                     }
+
+                    if (_shelfEnabledToggle != null)
+                    {
+                        bool shelfOn = _configService.Current.ShelfEnabled;
+                        _shelfEnabledToggle.IsChecked = shelfOn;
+                        if (_shelfConfigContainer != null)
+                        {
+                            _shelfConfigContainer.IsEnabled = shelfOn;
+                            _shelfConfigContainer.Opacity = shelfOn ? 1.0 : 0.45;
+                        }
+                    }
+                    if (_shelfMouseCombo != null)
+                    {
+                        _shelfMouseCombo.SelectedIndex = (int)_configService.Current.ShelfMouseButton;
+                    }
+                    if (_shelfCtrlCheck != null)
+                        _shelfCtrlCheck.IsChecked = _configService.Current.ShelfMouseRequireCtrl;
+                    if (_shelfAltCheck != null)
+                        _shelfAltCheck.IsChecked = _configService.Current.ShelfMouseRequireAlt;
+                    if (_shelfShiftCheck != null)
+                        _shelfShiftCheck.IsChecked = _configService.Current.ShelfMouseRequireShift;
+                    if (_shelfCloseOnLaunchToggle != null)
+                        _shelfCloseOnLaunchToggle.IsChecked = _configService.Current.ShelfCloseOnLaunch;
+                    if (_shelfCloseOnClickOutsideToggle != null)
+                        _shelfCloseOnClickOutsideToggle.IsChecked = _configService.Current.ShelfCloseOnClickOutside;
+                    if (_shelfBottomColsCombo != null)
+                        _shelfBottomColsCombo.SelectedIndex = Math.Max(0, Math.Min(6, _configService.Current.ShelfBottomColumns - 2));
+                    if (_shelfBottomRowsCombo != null)
+                        _shelfBottomRowsCombo.SelectedIndex = Math.Max(0, Math.Min(5, _configService.Current.ShelfBottomMaxRows - 1));
+                    if (_shelfBottomIconSizeCombo != null)
+                    {
+                        int sz = _configService.Current.ShelfBottomIconSize;
+                        _shelfBottomIconSizeCombo.SelectedIndex = sz <= 16 ? 0 : sz <= 20 ? 1 : sz <= 24 ? 2 : 3;
+                    }
+                    if (_shelfBottomDensityCombo != null)
+                        _shelfBottomDensityCombo.SelectedIndex = (int)_configService.Current.ShelfBottomDensity;
+                    if (_shelfBottomLabelsToggle != null)
+                        _shelfBottomLabelsToggle.IsChecked = _configService.Current.ShelfBottomShowLabels;
+
+                    if (_shelfHotkeyLabel != null && _shelfHotkeyBtn != null && _clearShelfHotkeyBtn != null)
+                    {
+                        bool hasShelfHk = !string.IsNullOrWhiteSpace(_configService.Current.ShelfHotkey);
+                        if (_isRecordingShelfHotkey)
+                        {
+                            _shelfHotkeyLabel.Text = "Press keys...";
+                            _shelfHotkeyLabel.Foreground = FluentTheme.AccentBrush;
+                            _shelfHotkeyBtn.BorderBrush = FluentTheme.AccentBrush;
+                        }
+                        else
+                        {
+                            _shelfHotkeyLabel.Text = hasShelfHk ? _configService.Current.ShelfHotkey : "Set shortcut...";
+                            _shelfHotkeyLabel.Foreground = hasShelfHk ? FluentTheme.TextPrimary : FluentTheme.TextSecondary;
+                            _shelfHotkeyBtn.BorderBrush = FluentTheme.SurfaceStroke;
+                        }
+                        _clearShelfHotkeyBtn.Visibility = hasShelfHk && !_isRecordingShelfHotkey ? Visibility.Visible : Visibility.Collapsed;
+                    }
                     if (_sendDiagnosticsToggle != null)
                     {
                         _sendDiagnosticsToggle.IsChecked = _configService.Current.SendDiagnosticsAndUsage;
@@ -619,6 +742,14 @@ namespace WinBins.Views
                 Margin = new Thickness(8, 0, 8, 6)
             });
 
+            _shelfNavRow = CreateFooterNavRow(
+                "\uE8A9",
+                FluentTheme.AccentBrush,
+                "Shelf",
+                WorkspacePane.Shelf,
+                out _shelfNavPill);
+            navFooter.Children.Add(_shelfNavRow);
+
             _donateNavRow = CreateFooterNavRow(
                 "\uEB51",
                 FluentTheme.DangerBrush,
@@ -678,6 +809,9 @@ namespace WinBins.Views
 
             _flyoutDrawerOverlay = BuildFlyoutOptionsDrawerOverlay();
             sheetHost.Children.Add(_flyoutDrawerOverlay);
+
+            _shelfView = BuildShelfView();
+            sheetHost.Children.Add(_shelfView);
 
             _donateView = BuildDonateView();
             sheetHost.Children.Add(_donateView);
@@ -1646,6 +1780,40 @@ namespace WinBins.Views
                 SaveAndSyncSelectedBin(bumpIcon: false);
             };
             controlsRows.Children.Add(CreateFlyoutSettingRow("Notification badges", _showNotificationBadgesToggle));
+            controlsRows.Children.Add(CreateSettingsRowDivider());
+
+            _addToShelfToggle = FluentTheme.CreateToggleCheckBox(null, false);
+            _addToShelfToggle.ToolTip = "Include this Bin in your cursor-triggered Shelf menu";
+            _addToShelfToggle.Checked += (_, __) =>
+            {
+                if (_updatingUi || _selectedBin == null) return;
+                _selectedBin.IncludeInShelf = true;
+                SaveAndSyncSelectedBin(bumpIcon: false);
+            };
+            _addToShelfToggle.Unchecked += (_, __) =>
+            {
+                if (_updatingUi || _selectedBin == null) return;
+                _selectedBin.IncludeInShelf = false;
+                SaveAndSyncSelectedBin(bumpIcon: false);
+            };
+            controlsRows.Children.Add(CreateFlyoutSettingRow("Add to Shelf", _addToShelfToggle));
+            controlsRows.Children.Add(CreateSettingsRowDivider());
+
+            _shelfShowAtRootToggle = FluentTheme.CreateToggleCheckBox(null, false);
+            _shelfShowAtRootToggle.ToolTip = "Place this Bin's items directly at the top level of Shelf instead of a submenu";
+            _shelfShowAtRootToggle.Checked += (_, __) =>
+            {
+                if (_updatingUi || _selectedBin == null) return;
+                _selectedBin.ShelfShowItemsAtRoot = true;
+                SaveAndSyncSelectedBin(bumpIcon: false);
+            };
+            _shelfShowAtRootToggle.Unchecked += (_, __) =>
+            {
+                if (_updatingUi || _selectedBin == null) return;
+                _selectedBin.ShelfShowItemsAtRoot = false;
+                SaveAndSyncSelectedBin(bumpIcon: false);
+            };
+            controlsRows.Children.Add(CreateFlyoutSettingRow("Shelf: top-level items", _shelfShowAtRootToggle));
 
             controlsCard.Child = controlsRows;
             sectionsStack.Children.Add(controlsCard);
@@ -1840,6 +2008,470 @@ namespace WinBins.Views
                 Foreground = FluentTheme.TextSecondary,
                 Margin = new Thickness(2, isFirst ? 0 : 14, 0, 8)
             };
+        }
+
+        private ScrollViewer BuildShelfView()
+        {
+            var scroll = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Padding = new Thickness(32, 24, 32, 32),
+                Visibility = Visibility.Collapsed
+            };
+
+            var panel = new StackPanel { MaxWidth = 740 };
+
+            var titleStack = new StackPanel { Margin = new Thickness(0, 0, 0, 14) };
+            titleStack.Children.Add(new TextBlock
+            {
+                Text = "Shelf",
+                FontFamily = FluentTheme.DisplayFont,
+                FontSize = 24,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = FluentTheme.TextPrimary
+            });
+            titleStack.Children.Add(new TextBlock
+            {
+                Text = "Manage which Bins appear in your cursor-triggered Shelf and customize how it opens",
+                FontSize = 12.5,
+                Foreground = FluentTheme.TextSecondary,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 3, 0, 0)
+            });
+            panel.Children.Add(titleStack);
+
+            _shelfEnabledToggle = FluentTheme.CreateToggleCheckBox(null, false);
+            _shelfEnabledToggle.Checked += GlobalSetting_Changed;
+            _shelfEnabledToggle.Unchecked += GlobalSetting_Changed;
+            panel.Children.Add(CreateSettingsCard(
+                "\uE8A9",
+                "Enable Shelf",
+                "Summon your selected Bins as a fast launcher menu right at your mouse cursor without using taskbar space",
+                _shelfEnabledToggle));
+
+            _shelfConfigContainer = new StackPanel();
+            panel.Children.Add(_shelfConfigContainer);
+            var configPanel = _shelfConfigContainer;
+
+            // --- BINS ON SHELF ---
+            var binsHeaderDock = new DockPanel { Margin = new Thickness(0, 4, 0, 8) };
+            var bulkBtns = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var addAllBtn = FluentTheme.CreateButton("Add all", isPrimary: false, isSubtle: false, padding: new Thickness(10, 4, 10, 4));
+            addAllBtn.Margin = new Thickness(0, 0, 6, 0);
+            addAllBtn.Click += (_, __) =>
+            {
+                if (_configService.Current?.Bins == null) return;
+                foreach (var b in _configService.Current.Bins)
+                {
+                    if (b != null) b.IncludeInShelf = true;
+                }
+                _configService.Save(notify: false);
+                RefreshFullUi();
+            };
+            bulkBtns.Children.Add(addAllBtn);
+
+            var removeAllBtn = FluentTheme.CreateButton("Remove all", isPrimary: false, isSubtle: false, padding: new Thickness(10, 4, 10, 4));
+            removeAllBtn.Click += (_, __) =>
+            {
+                if (_configService.Current?.Bins == null) return;
+                foreach (var b in _configService.Current.Bins)
+                {
+                    if (b != null) b.IncludeInShelf = false;
+                }
+                _configService.Save(notify: false);
+                RefreshFullUi();
+            };
+            bulkBtns.Children.Add(removeAllBtn);
+            DockPanel.SetDock(bulkBtns, Dock.Right);
+            binsHeaderDock.Children.Add(bulkBtns);
+
+            binsHeaderDock.Children.Add(CreateSettingsSectionHeader("Bins on Shelf"));
+            configPanel.Children.Add(binsHeaderDock);
+
+            var binsCard = new Border
+            {
+                Background = FluentTheme.CardBg,
+                BorderBrush = FluentTheme.CardBorder,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(14, 10, 14, 10),
+                Margin = new Thickness(0, 0, 0, 12)
+            };
+            _shelfBinsListPanel = new StackPanel();
+            binsCard.Child = _shelfBinsListPanel;
+            configPanel.Children.Add(binsCard);
+
+            // --- TRIGGER ---
+            configPanel.Children.Add(CreateSettingsSectionHeader("Trigger"));
+
+            var mouseCard = new Border
+            {
+                Background = FluentTheme.CardBg,
+                BorderBrush = FluentTheme.CardBorder,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(16, 12, 16, 14),
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            var mouseStack = new StackPanel();
+            var mouseHeaderGrid = new Grid();
+            mouseHeaderGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            mouseHeaderGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var mouseIcon = new TextBlock
+            {
+                Text = "\uE962",
+                FontFamily = FluentTheme.IconFont,
+                FontSize = 18,
+                Foreground = FluentTheme.TextSecondary,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 14, 0)
+            };
+            Grid.SetColumn(mouseIcon, 0);
+            mouseHeaderGrid.Children.Add(mouseIcon);
+
+            var mouseTextStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            mouseTextStack.Children.Add(new TextBlock
+            {
+                Text = "Mouse button trigger",
+                FontSize = 13.5,
+                FontWeight = FontWeights.Medium,
+                Foreground = FluentTheme.TextPrimary
+            });
+            mouseTextStack.Children.Add(new TextBlock
+            {
+                Text = "Click a mouse button (optionally while holding modifier keys) anywhere to open Shelf at the cursor",
+                FontSize = 11.5,
+                Foreground = FluentTheme.TextSecondary,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 2, 0, 0)
+            });
+            Grid.SetColumn(mouseTextStack, 1);
+            mouseHeaderGrid.Children.Add(mouseTextStack);
+            mouseStack.Children.Add(mouseHeaderGrid);
+
+            var mouseTriggerPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(32, 10, 0, 0)
+            };
+            _shelfMouseCombo = new ComboBox
+            {
+                Width = 148,
+                Margin = new Thickness(0, 0, 12, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _shelfMouseCombo.Items.Add("Disabled");
+            _shelfMouseCombo.Items.Add("Middle Click");
+            _shelfMouseCombo.Items.Add("Mouse Button 4");
+            _shelfMouseCombo.Items.Add("Mouse Button 5");
+            _shelfMouseCombo.SelectedIndex = 1;
+            _shelfMouseCombo.SelectionChanged += (_, __) => GlobalSetting_Changed(_shelfMouseCombo, new RoutedEventArgs());
+            mouseTriggerPanel.Children.Add(_shelfMouseCombo);
+
+            _shelfCtrlCheck = FluentTheme.CreateTickCheckBox("Ctrl", true);
+            _shelfCtrlCheck.Margin = new Thickness(0, 0, 10, 0);
+            _shelfCtrlCheck.Checked += GlobalSetting_Changed;
+            _shelfCtrlCheck.Unchecked += GlobalSetting_Changed;
+            mouseTriggerPanel.Children.Add(_shelfCtrlCheck);
+
+            _shelfAltCheck = FluentTheme.CreateTickCheckBox("Alt", false);
+            _shelfAltCheck.Margin = new Thickness(0, 0, 10, 0);
+            _shelfAltCheck.Checked += GlobalSetting_Changed;
+            _shelfAltCheck.Unchecked += GlobalSetting_Changed;
+            mouseTriggerPanel.Children.Add(_shelfAltCheck);
+
+            _shelfShiftCheck = FluentTheme.CreateTickCheckBox("Shift", false);
+            _shelfShiftCheck.Checked += GlobalSetting_Changed;
+            _shelfShiftCheck.Unchecked += GlobalSetting_Changed;
+            mouseTriggerPanel.Children.Add(_shelfShiftCheck);
+
+            mouseStack.Children.Add(mouseTriggerPanel);
+            mouseCard.Child = mouseStack;
+            configPanel.Children.Add(mouseCard);
+
+            var shelfHotkeyControls = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            _shelfHotkeyLabel = new TextBlock
+            {
+                Text = "Set shortcut...",
+                FontSize = 12,
+                Foreground = FluentTheme.TextSecondary,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _shelfHotkeyBtn = FluentTheme.CreateButton("", padding: new Thickness(10, 5, 10, 5));
+            _shelfHotkeyBtn.Content = _shelfHotkeyLabel;
+            _shelfHotkeyBtn.ToolTip = "Click and press a global keyboard shortcut to open Shelf at your cursor";
+            _shelfHotkeyBtn.Click += (_, __) =>
+            {
+                _isRecordingShelfHotkey = !_isRecordingShelfHotkey;
+                RefreshFullUi();
+                if (_isRecordingShelfHotkey)
+                {
+                    Focus();
+                }
+            };
+            shelfHotkeyControls.Children.Add(_shelfHotkeyBtn);
+
+            _clearShelfHotkeyBtn = FluentTheme.CreateIconButton("\uE711", "Clear Shelf shortcut", size: 28, iconSize: 10);
+            _clearShelfHotkeyBtn.Margin = new Thickness(6, 0, 0, 0);
+            _clearShelfHotkeyBtn.Click += (_, __) =>
+            {
+                if (_configService.Current != null)
+                {
+                    _isRecordingShelfHotkey = false;
+                    _configService.Current.ShelfHotkey = string.Empty;
+                    _configService.Save(notify: false);
+                    SyncAllHotkeys();
+                    _onShelfConfigChanged?.Invoke();
+                    RefreshFullUi();
+                }
+            };
+            shelfHotkeyControls.Children.Add(_clearShelfHotkeyBtn);
+
+            configPanel.Children.Add(CreateSettingsCard(
+                "\uE765",
+                "Keyboard shortcut",
+                "Optional global hotkey to open Shelf at the current cursor position",
+                shelfHotkeyControls));
+
+            // --- BEHAVIOR ---
+            configPanel.Children.Add(CreateSettingsSectionHeader("Behavior"));
+
+            _shelfCloseOnLaunchToggle = FluentTheme.CreateToggleCheckBox(null, true);
+            _shelfCloseOnLaunchToggle.Checked += GlobalSetting_Changed;
+            _shelfCloseOnLaunchToggle.Unchecked += GlobalSetting_Changed;
+            configPanel.Children.Add(CreateSettingsCard(
+                "\uE8BB",
+                "Close Shelf after launching",
+                "Automatically dismiss Shelf as soon as you launch an app or item",
+                _shelfCloseOnLaunchToggle));
+
+            _shelfCloseOnClickOutsideToggle = FluentTheme.CreateToggleCheckBox(null, true);
+            _shelfCloseOnClickOutsideToggle.Checked += GlobalSetting_Changed;
+            _shelfCloseOnClickOutsideToggle.Unchecked += GlobalSetting_Changed;
+            configPanel.Children.Add(CreateSettingsCard(
+                "\uE8A7",
+                "Close Shelf when clicking outside",
+                "Dismiss Shelf automatically when clicking away from the menu",
+                _shelfCloseOnClickOutsideToggle));
+
+            var bottomGridControls = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            bottomGridControls.Children.Add(new TextBlock
+            {
+                Text = "Columns",
+                FontSize = 12,
+                Foreground = FluentTheme.TextSecondary,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0)
+            });
+            _shelfBottomColsCombo = new ComboBox
+            {
+                Width = 64,
+                Margin = new Thickness(0, 0, 12, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            for (int c = 2; c <= 8; c++)
+                _shelfBottomColsCombo.Items.Add(c.ToString());
+            _shelfBottomColsCombo.SelectedIndex = 1; // 3
+            _shelfBottomColsCombo.SelectionChanged += (_, __) => GlobalSetting_Changed(_shelfBottomColsCombo, new RoutedEventArgs());
+            bottomGridControls.Children.Add(_shelfBottomColsCombo);
+
+            bottomGridControls.Children.Add(new TextBlock
+            {
+                Text = "Max rows",
+                FontSize = 12,
+                Foreground = FluentTheme.TextSecondary,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0)
+            });
+            _shelfBottomRowsCombo = new ComboBox
+            {
+                Width = 64,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            for (int r = 1; r <= 6; r++)
+                _shelfBottomRowsCombo.Items.Add(r.ToString());
+            _shelfBottomRowsCombo.SelectedIndex = 1; // 2
+            _shelfBottomRowsCombo.SelectionChanged += (_, __) => GlobalSetting_Changed(_shelfBottomRowsCombo, new RoutedEventArgs());
+            bottomGridControls.Children.Add(_shelfBottomRowsCombo);
+
+            configPanel.Children.Add(CreateSettingsCard(
+                "\uF0E2",
+                "Bottom bar grid",
+                "Fixed columns and max visible rows for Bottom bar Bins before vertical scrolling",
+                bottomGridControls));
+
+            _shelfBottomIconSizeCombo = new ComboBox
+            {
+                Width = 132,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _shelfBottomIconSizeCombo.Items.Add("16 px (Small)");
+            _shelfBottomIconSizeCombo.Items.Add("20 px (Default)");
+            _shelfBottomIconSizeCombo.Items.Add("24 px (Medium)");
+            _shelfBottomIconSizeCombo.Items.Add("32 px (Large)");
+            _shelfBottomIconSizeCombo.SelectedIndex = 1;
+            _shelfBottomIconSizeCombo.SelectionChanged += (_, __) => GlobalSetting_Changed(_shelfBottomIconSizeCombo, new RoutedEventArgs());
+            configPanel.Children.Add(CreateSettingsCard(
+                "\uE790",
+                "Bottom bar icon size",
+                "Adjust the icon size for items displayed in the Shelf bottom bar",
+                _shelfBottomIconSizeCombo));
+
+            _shelfBottomDensityCombo = new ComboBox
+            {
+                Width = 110,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _shelfBottomDensityCombo.Items.Add("Compact");
+            _shelfBottomDensityCombo.Items.Add("Normal");
+            _shelfBottomDensityCombo.Items.Add("Spacious");
+            _shelfBottomDensityCombo.SelectedIndex = 1;
+            _shelfBottomDensityCombo.SelectionChanged += (_, __) => GlobalSetting_Changed(_shelfBottomDensityCombo, new RoutedEventArgs());
+            configPanel.Children.Add(CreateSettingsCard(
+                "\uE8B3",
+                "Bottom bar compactness",
+                "Control tile spacing and padding in the Shelf bottom bar",
+                _shelfBottomDensityCombo));
+
+            _shelfBottomLabelsToggle = FluentTheme.CreateToggleCheckBox(null, true);
+            _shelfBottomLabelsToggle.Checked += GlobalSetting_Changed;
+            _shelfBottomLabelsToggle.Unchecked += GlobalSetting_Changed;
+            configPanel.Children.Add(CreateSettingsCard(
+                "\uE8EC",
+                "Show bottom bar item labels",
+                "Display item names beneath icons in the Shelf bottom bar",
+                _shelfBottomLabelsToggle));
+
+            scroll.Content = panel;
+            return scroll;
+        }
+
+        private void RebuildShelfBinsList()
+        {
+            if (_shelfBinsListPanel == null)
+                return;
+
+            _shelfBinsListPanel.Children.Clear();
+            var bins = _configService.Current?.Bins;
+            if (bins == null || bins.Count == 0)
+            {
+                _shelfBinsListPanel.Children.Add(new TextBlock
+                {
+                    Text = "No Bins created yet. Create a Bin in the sidebar first.",
+                    FontSize = 12,
+                    Foreground = FluentTheme.TextMuted,
+                    Margin = new Thickness(4, 6, 4, 6)
+                });
+                return;
+            }
+
+            var orderedBins = bins.OrderBy(b => b.TaskbarOrder).ToList();
+            for (int i = 0; i < orderedBins.Count; i++)
+            {
+                BinGroup bin = orderedBins[i];
+                if (i > 0)
+                {
+                    _shelfBinsListPanel.Children.Add(CreateSettingsRowDivider());
+                }
+
+                var row = new DockPanel { Margin = new Thickness(2, 6, 2, 6) };
+
+                var rightControls = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                var placementCombo = new ComboBox
+                {
+                    Width = 116,
+                    Margin = new Thickness(0, 0, 12, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    IsEnabled = bin.IncludeInShelf,
+                    Opacity = bin.IncludeInShelf ? 1.0 : 0.45
+                };
+                placementCombo.Items.Add("Submenu");
+                placementCombo.Items.Add("Top-level");
+                placementCombo.Items.Add("Bottom bar");
+                placementCombo.SelectedIndex = (int)bin.ShelfPlacement;
+                placementCombo.ToolTip = "Submenu: opens on hover • Top-level: items in main list • Bottom bar: horizontal icon strip";
+                placementCombo.SelectionChanged += (_, __) =>
+                {
+                    if (_updatingUi || placementCombo.SelectedIndex < 0) return;
+                    bin.ShelfPlacement = (ShelfBinPlacement)placementCombo.SelectedIndex;
+                    bin.ShelfShowItemsAtRoot = bin.ShelfPlacement == ShelfBinPlacement.TopLevel;
+                    _configService.Save(notify: false);
+                };
+                rightControls.Children.Add(placementCombo);
+
+                var includeToggle = FluentTheme.CreateToggleCheckBox(null, bin.IncludeInShelf);
+                includeToggle.ToolTip = "Include this Bin in Shelf";
+                includeToggle.Checked += (_, __) =>
+                {
+                    if (_updatingUi) return;
+                    bin.IncludeInShelf = true;
+                    _configService.Save(notify: false);
+                    placementCombo.IsEnabled = true;
+                    placementCombo.Opacity = 1.0;
+                    if (_selectedBin == bin && _addToShelfToggle != null)
+                        _addToShelfToggle.IsChecked = true;
+                };
+                includeToggle.Unchecked += (_, __) =>
+                {
+                    if (_updatingUi) return;
+                    bin.IncludeInShelf = false;
+                    _configService.Save(notify: false);
+                    placementCombo.IsEnabled = false;
+                    placementCombo.Opacity = 0.45;
+                    if (_selectedBin == bin && _addToShelfToggle != null)
+                        _addToShelfToggle.IsChecked = false;
+                };
+                rightControls.Children.Add(includeToggle);
+
+                DockPanel.SetDock(rightControls, Dock.Right);
+                row.Children.Add(rightControls);
+
+                var leftInfo = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                var binSrc = _iconService.CreateBinImageSource(bin);
+                if (binSrc != null)
+                {
+                    var iconImg = new Image
+                    {
+                        Source = binSrc,
+                        Width = 20,
+                        Height = 20,
+                        Stretch = Stretch.Uniform,
+                        Margin = new Thickness(0, 0, 10, 0)
+                    };
+                    RenderOptions.SetBitmapScalingMode(iconImg, BitmapScalingMode.HighQuality);
+                    leftInfo.Children.Add(iconImg);
+                }
+
+                var textStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+                textStack.Children.Add(new TextBlock
+                {
+                    Text = bin.Name,
+                    FontSize = 13,
+                    FontWeight = FontWeights.Medium,
+                    Foreground = FluentTheme.TextPrimary
+                });
+                int itemCount = bin.Items?.Count ?? 0;
+                textStack.Children.Add(new TextBlock
+                {
+                    Text = !string.IsNullOrWhiteSpace(bin.LiveFolderPath)
+                        ? "Smart Live Folder"
+                        : $"{itemCount} {(itemCount == 1 ? "item" : "items")}",
+                    FontSize = 11,
+                    Foreground = FluentTheme.TextMuted
+                });
+                leftInfo.Children.Add(textStack);
+                row.Children.Add(leftInfo);
+
+                _shelfBinsListPanel.Children.Add(row);
+            }
         }
 
         private ScrollViewer BuildSettingsView()
@@ -2625,9 +3257,21 @@ namespace WinBins.Views
             {
                 new ReleaseNotesEntry
                 {
+                    Version = "v1.6.0",
+                    Headline = "Cursor-Triggered Shelf Launcher",
+                    IsLatest = true,
+                    Highlights = new[]
+                    {
+                        "Introduced Shelf — a cursor-triggered launcher menu that opens anywhere under your pointer via Middle-click / Mouse 4 / Mouse 5 (with optional Ctrl/Alt/Shift modifiers) or a global hotkey.",
+                        "Supports both cascading vertical List mode (with hover submenus for Bins and live Folders) and compact Grid mode.",
+                        "Customize per-Bin placement (Submenu, Top-level, or Bottom Bar) with configurable columns, rows, icon size, density, and label visibility."
+                    }
+                },
+                new ReleaseNotesEntry
+                {
                     Version = "v1.5.14",
                     Headline = "Instant Taskbar Tooltip Suppression & Portable ZIP Releases",
-                    IsLatest = true,
+                    IsLatest = false,
                     Highlights = new[]
                     {
                         "Upgraded Windows 11 taskbar tooltip & thumbnail suppression to event-driven hooks (EVENT_OBJECT_SHOW / EVENT_OBJECT_UNCLOAKED) for instant, flicker-free flyouts and hover peeks.",
@@ -3420,6 +4064,10 @@ namespace WinBins.Views
                 _binsListPanel.Children.Add(row);
             }
 
+            if (_shelfNavRow != null)
+            {
+                ApplyFooterNavState(_shelfNavRow, _shelfNavPill, _activePane == WorkspacePane.Shelf);
+            }
             ApplyFooterNavState(_donateNavRow, _donateNavPill, _activePane == WorkspacePane.Donate);
             ApplyFooterNavState(_settingsNavRow, _settingsNavPill, _activePane == WorkspacePane.Settings);
             ApplyFooterNavState(_whatsNewNavRow, _whatsNewNavPill, _activePane == WorkspacePane.WhatsNew);
@@ -3566,6 +4214,14 @@ namespace WinBins.Views
 
         private void RebuildRightPane()
         {
+            if (_shelfView != null)
+            {
+                _shelfView.Visibility = _activePane == WorkspacePane.Shelf ? Visibility.Visible : Visibility.Collapsed;
+                if (_activePane == WorkspacePane.Shelf)
+                {
+                    RebuildShelfBinsList();
+                }
+            }
             _donateView.Visibility = _activePane == WorkspacePane.Donate ? Visibility.Visible : Visibility.Collapsed;
             _settingsView.Visibility = _activePane == WorkspacePane.Settings ? Visibility.Visible : Visibility.Collapsed;
             _whatsNewView.Visibility = _activePane == WorkspacePane.WhatsNew ? Visibility.Visible : Visibility.Collapsed;
@@ -3792,6 +4448,14 @@ namespace WinBins.Views
             if (_floatOpenAppsToggle != null)
             {
                 _floatOpenAppsToggle.IsChecked = _selectedBin.FloatOpenAppsFirst;
+            }
+            if (_addToShelfToggle != null)
+            {
+                _addToShelfToggle.IsChecked = _selectedBin.IncludeInShelf;
+            }
+            if (_shelfShowAtRootToggle != null)
+            {
+                _shelfShowAtRootToggle.IsChecked = _selectedBin.ShelfShowItemsAtRoot;
             }
 
             RebuildItemsList();
@@ -6096,6 +6760,62 @@ namespace WinBins.Views
             {
                 _configService.Current.SendDiagnosticsAndUsage = _sendDiagnosticsToggle.IsChecked == true;
             }
+            if (_shelfEnabledToggle != null)
+            {
+                bool shelfOn = _shelfEnabledToggle.IsChecked == true;
+                _configService.Current.ShelfEnabled = shelfOn;
+                if (_shelfConfigContainer != null)
+                {
+                    _shelfConfigContainer.IsEnabled = shelfOn;
+                    _shelfConfigContainer.Opacity = shelfOn ? 1.0 : 0.45;
+                }
+            }
+            if (_shelfMouseCombo != null && _shelfMouseCombo.SelectedIndex >= 0 && _shelfMouseCombo.SelectedIndex <= 3)
+            {
+                _configService.Current.ShelfMouseButton = (ShelfMouseTrigger)_shelfMouseCombo.SelectedIndex;
+            }
+            if (_shelfCtrlCheck != null)
+            {
+                _configService.Current.ShelfMouseRequireCtrl = _shelfCtrlCheck.IsChecked == true;
+            }
+            if (_shelfAltCheck != null)
+            {
+                _configService.Current.ShelfMouseRequireAlt = _shelfAltCheck.IsChecked == true;
+            }
+            if (_shelfShiftCheck != null)
+            {
+                _configService.Current.ShelfMouseRequireShift = _shelfShiftCheck.IsChecked == true;
+            }
+            if (_shelfCloseOnLaunchToggle != null)
+            {
+                _configService.Current.ShelfCloseOnLaunch = _shelfCloseOnLaunchToggle.IsChecked == true;
+            }
+            if (_shelfCloseOnClickOutsideToggle != null)
+            {
+                _configService.Current.ShelfCloseOnClickOutside = _shelfCloseOnClickOutsideToggle.IsChecked == true;
+            }
+            if (_shelfBottomColsCombo != null && _shelfBottomColsCombo.SelectedIndex >= 0)
+            {
+                _configService.Current.ShelfBottomColumns = _shelfBottomColsCombo.SelectedIndex + 2;
+            }
+            if (_shelfBottomRowsCombo != null && _shelfBottomRowsCombo.SelectedIndex >= 0)
+            {
+                _configService.Current.ShelfBottomMaxRows = _shelfBottomRowsCombo.SelectedIndex + 1;
+            }
+            if (_shelfBottomIconSizeCombo != null && _shelfBottomIconSizeCombo.SelectedIndex >= 0)
+            {
+                int[] sizes = { 16, 20, 24, 32 };
+                _configService.Current.ShelfBottomIconSize = sizes[Math.Min(3, _shelfBottomIconSizeCombo.SelectedIndex)];
+            }
+            if (_shelfBottomDensityCombo != null && _shelfBottomDensityCombo.SelectedIndex >= 0 && _shelfBottomDensityCombo.SelectedIndex <= 2)
+            {
+                _configService.Current.ShelfBottomDensity = (BinFlyoutDensity)_shelfBottomDensityCombo.SelectedIndex;
+            }
+            if (_shelfBottomLabelsToggle != null)
+            {
+                _configService.Current.ShelfBottomShowLabels = _shelfBottomLabelsToggle.IsChecked == true;
+            }
+            _onShelfConfigChanged?.Invoke();
 
             bool globalHide = _hideRunningAppsGlobalToggle?.IsChecked == true;
             if (ReferenceEquals(sender, _hideRunningAppsGlobalToggle) ||

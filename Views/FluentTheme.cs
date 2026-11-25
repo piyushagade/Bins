@@ -260,6 +260,8 @@ namespace WinBins.Views
             resources[typeof(ToolTip)] = CreateWin11ToolTipStyle();
             resources[typeof(ContextMenu)] = CreateWin11ContextMenuStyle();
             resources[typeof(MenuItem)] = CreateWin11MenuItemStyle();
+            resources[typeof(ComboBox)] = CreateWin11ComboBoxStyle();
+            resources[typeof(ComboBoxItem)] = CreateWin11ComboBoxItemStyle();
         }
 
         private static Style CreateGentleScrollViewerStyle()
@@ -374,6 +376,156 @@ namespace WinBins.Views
             template.VisualTree = border;
             style.Setters.Add(new Setter(Control.TemplateProperty, template));
             style.Setters.Add(new Setter(ContextMenu.HasDropShadowProperty, true));
+            return style;
+        }
+
+        private static Style CreateWin11ComboBoxStyle()
+        {
+            var style = new Style(typeof(ComboBox));
+            style.Setters.Add(CreateBrushSetter(Control.ForegroundProperty, TextPrimary));
+            style.Setters.Add(new Setter(Control.FontSizeProperty, 12.0));
+            style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(10, 5, 8, 5)));
+            style.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 30.0));
+            style.Setters.Add(new Setter(FrameworkElement.CursorProperty, Cursors.Hand));
+            style.Setters.Add(new Setter(ComboBox.SnapsToDevicePixelsProperty, true));
+
+            // ToggleButton template that fills the ComboBox
+            var toggleTemplate = new ControlTemplate(typeof(System.Windows.Controls.Primitives.ToggleButton));
+            var toggleBorder = new FrameworkElementFactory(typeof(Border), "ToggleBorder");
+            SetFactoryBrush(toggleBorder, Border.BackgroundProperty, InputBg);
+            SetFactoryBrush(toggleBorder, Border.BorderBrushProperty, SurfaceStroke);
+            toggleBorder.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            toggleBorder.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
+            toggleTemplate.VisualTree = toggleBorder;
+
+            var hoverTrigger = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+            hoverTrigger.Setters.Add(CreateBrushSetter(Border.BackgroundProperty, CardHoverBg, "ToggleBorder"));
+            hoverTrigger.Setters.Add(CreateBrushSetter(Border.BorderBrushProperty, SubtleBorder, "ToggleBorder"));
+            toggleTemplate.Triggers.Add(hoverTrigger);
+
+            var toggleStyle = new Style(typeof(System.Windows.Controls.Primitives.ToggleButton));
+            toggleStyle.Setters.Add(new Setter(Control.TemplateProperty, toggleTemplate));
+            toggleStyle.Setters.Add(new Setter(UIElement.FocusableProperty, false));
+
+            var template = new ControlTemplate(typeof(ComboBox));
+            var rootGrid = new FrameworkElementFactory(typeof(Grid));
+
+            var toggle = new FrameworkElementFactory(typeof(System.Windows.Controls.Primitives.ToggleButton), "ToggleButton");
+            toggle.SetValue(FrameworkElement.StyleProperty, toggleStyle);
+            toggle.SetValue(System.Windows.Controls.Primitives.ToggleButton.ClickModeProperty, ClickMode.Press);
+            toggle.SetBinding(System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty,
+                new System.Windows.Data.Binding("IsDropDownOpen")
+                {
+                    RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent),
+                    Mode = System.Windows.Data.BindingMode.TwoWay
+                });
+            rootGrid.AppendChild(toggle);
+
+            var contentGrid = new FrameworkElementFactory(typeof(Grid));
+            contentGrid.SetValue(UIElement.IsHitTestVisibleProperty, false);
+            var colText = new FrameworkElementFactory(typeof(ColumnDefinition));
+            colText.SetValue(ColumnDefinition.WidthProperty, new GridLength(1, GridUnitType.Star));
+            var colArrow = new FrameworkElementFactory(typeof(ColumnDefinition));
+            colArrow.SetValue(ColumnDefinition.WidthProperty, GridLength.Auto);
+            contentGrid.AppendChild(colText);
+            contentGrid.AppendChild(colArrow);
+
+            var contentSite = new FrameworkElementFactory(typeof(ContentPresenter), "ContentSite");
+            contentSite.SetValue(Grid.ColumnProperty, 0);
+            contentSite.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            contentSite.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Left);
+            contentSite.SetValue(FrameworkElement.MarginProperty, new Thickness(10, 5, 6, 5));
+            contentSite.SetBinding(ContentPresenter.ContentProperty,
+                new System.Windows.Data.Binding("SelectionBoxItem")
+                {
+                    RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent)
+                });
+            contentSite.SetBinding(ContentPresenter.ContentTemplateProperty,
+                new System.Windows.Data.Binding("SelectionBoxItemTemplate")
+                {
+                    RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent)
+                });
+            contentGrid.AppendChild(contentSite);
+
+            var arrow = new FrameworkElementFactory(typeof(TextBlock));
+            arrow.SetValue(Grid.ColumnProperty, 1);
+            arrow.SetValue(TextBlock.TextProperty, "\uE70D");
+            arrow.SetValue(TextBlock.FontFamilyProperty, IconFont);
+            arrow.SetValue(TextBlock.FontSizeProperty, 10.0);
+            SetFactoryBrush(arrow, TextBlock.ForegroundProperty, TextSecondary);
+            arrow.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            arrow.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 10, 0));
+            contentGrid.AppendChild(arrow);
+
+            rootGrid.AppendChild(contentGrid);
+
+            var popup = new FrameworkElementFactory(typeof(System.Windows.Controls.Primitives.Popup), "PART_Popup");
+            popup.SetValue(System.Windows.Controls.Primitives.Popup.AllowsTransparencyProperty, true);
+            popup.SetValue(System.Windows.Controls.Primitives.Popup.PlacementProperty, System.Windows.Controls.Primitives.PlacementMode.Bottom);
+            popup.SetValue(System.Windows.Controls.Primitives.Popup.VerticalOffsetProperty, 4.0);
+            popup.SetValue(System.Windows.Controls.Primitives.Popup.FocusableProperty, false);
+            popup.SetValue(System.Windows.Controls.Primitives.Popup.PopupAnimationProperty, System.Windows.Controls.Primitives.PopupAnimation.Fade);
+            popup.SetBinding(System.Windows.Controls.Primitives.Popup.IsOpenProperty,
+                new System.Windows.Data.Binding("IsDropDownOpen")
+                {
+                    RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent)
+                });
+
+            var dropBorder = new FrameworkElementFactory(typeof(Border));
+            SetFactoryBrush(dropBorder, Border.BackgroundProperty, FlyoutBg);
+            SetFactoryBrush(dropBorder, Border.BorderBrushProperty, SubtleBorder);
+            dropBorder.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            dropBorder.SetValue(Border.CornerRadiusProperty, new CornerRadius(8));
+            dropBorder.SetValue(Border.PaddingProperty, new Thickness(4));
+            dropBorder.SetBinding(FrameworkElement.MinWidthProperty,
+                new System.Windows.Data.Binding("ActualWidth")
+                {
+                    RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent)
+                });
+            dropBorder.SetValue(FrameworkElement.MaxHeightProperty, 260.0);
+
+            var sv = new FrameworkElementFactory(typeof(ScrollViewer));
+            sv.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
+            sv.SetValue(ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled);
+            var itemsPresenter = new FrameworkElementFactory(typeof(ItemsPresenter));
+            sv.AppendChild(itemsPresenter);
+            dropBorder.AppendChild(sv);
+            popup.AppendChild(dropBorder);
+            rootGrid.AppendChild(popup);
+
+            template.VisualTree = rootGrid;
+            style.Setters.Add(new Setter(Control.TemplateProperty, template));
+            return style;
+        }
+
+        private static Style CreateWin11ComboBoxItemStyle()
+        {
+            var style = new Style(typeof(ComboBoxItem));
+            style.Setters.Add(CreateBrushSetter(Control.ForegroundProperty, TextPrimary));
+            style.Setters.Add(new Setter(Control.FontSizeProperty, 12.0));
+            style.Setters.Add(new Setter(FrameworkElement.CursorProperty, Cursors.Hand));
+
+            var template = new ControlTemplate(typeof(ComboBoxItem));
+            var border = new FrameworkElementFactory(typeof(Border), "ItemRow");
+            border.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(5));
+            border.SetValue(Border.PaddingProperty, new Thickness(10, 6, 10, 6));
+            border.SetValue(FrameworkElement.MarginProperty, new Thickness(1));
+
+            var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            presenter.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            border.AppendChild(presenter);
+            template.VisualTree = border;
+
+            var hoverTrigger = new Trigger { Property = ComboBoxItem.IsHighlightedProperty, Value = true };
+            hoverTrigger.Setters.Add(CreateBrushSetter(Border.BackgroundProperty, SubtleHoverBg, "ItemRow"));
+            template.Triggers.Add(hoverTrigger);
+
+            var selectedTrigger = new Trigger { Property = ComboBoxItem.IsSelectedProperty, Value = true };
+            selectedTrigger.Setters.Add(CreateBrushSetter(Border.BackgroundProperty, CardSelectedBg, "ItemRow"));
+            template.Triggers.Add(selectedTrigger);
+
+            style.Setters.Add(new Setter(Control.TemplateProperty, template));
             return style;
         }
 

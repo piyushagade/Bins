@@ -14,11 +14,13 @@ namespace WinBins.Services
         private HwndSource _hwndSource;
         private readonly Dictionary<int, BinGroup> _registeredBins = new Dictionary<int, BinGroup>();
         private int _globalSearchHotkeyId = -1;
+        private int _shelfHotkeyId = -1;
         private int _nextHotkeyId = 9100;
         private bool _disposed;
 
         public event Action<BinGroup> BinHotkeyPressed;
         public event Action GlobalSearchHotkeyPressed;
+        public event Action ShelfHotkeyPressed;
 
         public GlobalHotkeyManager()
         {
@@ -51,7 +53,7 @@ namespace WinBins.Services
             }
         }
 
-        public void SyncHotkeys(IEnumerable<BinGroup> bins, string globalSearchHotkey = null)
+        public void SyncHotkeys(IEnumerable<BinGroup> bins, string globalSearchHotkey = null, string shelfHotkey = null)
         {
             if (_disposed)
                 return;
@@ -69,6 +71,16 @@ namespace WinBins.Services
                 if (Win32Interop.RegisterHotKey(_hwndSource.Handle, searchId, searchMods | Win32Interop.MOD_NOREPEAT, searchVk))
                 {
                     _globalSearchHotkeyId = searchId;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(shelfHotkey) &&
+                TryParseHotkey(shelfHotkey, out uint shelfMods, out uint shelfVk))
+            {
+                int shelfId = _nextHotkeyId++;
+                if (Win32Interop.RegisterHotKey(_hwndSource.Handle, shelfId, shelfMods | Win32Interop.MOD_NOREPEAT, shelfVk))
+                {
+                    _shelfHotkeyId = shelfId;
                 }
             }
 
@@ -100,6 +112,11 @@ namespace WinBins.Services
                     try { Win32Interop.UnregisterHotKey(_hwndSource.Handle, _globalSearchHotkeyId); } catch { }
                 }
 
+                if (_shelfHotkeyId != -1)
+                {
+                    try { Win32Interop.UnregisterHotKey(_hwndSource.Handle, _shelfHotkeyId); } catch { }
+                }
+
                 foreach (int id in _registeredBins.Keys)
                 {
                     try
@@ -112,6 +129,7 @@ namespace WinBins.Services
                 }
             }
             _globalSearchHotkeyId = -1;
+            _shelfHotkeyId = -1;
             _registeredBins.Clear();
         }
 
@@ -124,6 +142,11 @@ namespace WinBins.Services
                 {
                     handled = true;
                     GlobalSearchHotkeyPressed?.Invoke();
+                }
+                else if (_shelfHotkeyId != -1 && id == _shelfHotkeyId)
+                {
+                    handled = true;
+                    ShelfHotkeyPressed?.Invoke();
                 }
                 else if (_registeredBins.TryGetValue(id, out BinGroup bin) && bin != null)
                 {

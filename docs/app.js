@@ -77,7 +77,7 @@
       badge: "Smart Live",
       tabs: {
         Downloads: [
-          { name: "Bins-1.5.14.exe", glyph: "EXE", color: "#0EA5E9" },
+          { name: "Bins-1.6.0.exe", glyph: "EXE", color: "#0EA5E9" },
           { name: "Invoice.pdf", glyph: "PDF", color: "#E11D48" },
           { name: "Assets.zip", glyph: "ZIP", color: "#D97706" },
           { name: "Mockup.png", glyph: "PNG", color: "#8B5CF6" },
@@ -389,7 +389,7 @@
 
   copySilentBtn?.addEventListener("click", () => {
     navigator.clipboard
-      ?.writeText(".\\Bins-Setup-1.5.14-x64.exe /SILENT /NORESTART")
+      ?.writeText(".\\Bins-Setup-1.6.0-x64.exe /SILENT /NORESTART")
       .then(() => {
         if (copySilentLabel) copySilentLabel.textContent = "Copied";
         setTimeout(() => {

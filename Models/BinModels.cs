@@ -55,6 +55,27 @@ namespace WinBins.Models
         TypeThenName = 2
     }
 
+    public enum ShelfLayoutMode
+    {
+        List = 0,
+        Grid = 1
+    }
+
+    public enum ShelfBinPlacement
+    {
+        Submenu = 0,
+        TopLevel = 1,
+        BottomBar = 2
+    }
+
+    public enum ShelfMouseTrigger
+    {
+        None = 0,
+        MiddleButton = 1,
+        XButton1 = 2,
+        XButton2 = 3
+    }
+
     public enum BinItemKind
     {
         Application = 0,
@@ -169,6 +190,48 @@ namespace WinBins.Models
         [DataMember(Order = 19)]
         public bool SendDiagnosticsAndUsage { get; set; } = true;
 
+        [DataMember(Order = 20)]
+        public bool ShelfEnabled { get; set; } = false;
+
+        [DataMember(Order = 21)]
+        public ShelfLayoutMode ShelfLayout { get; set; } = ShelfLayoutMode.List;
+
+        [DataMember(Order = 22)]
+        public string ShelfHotkey { get; set; } = string.Empty;
+
+        [DataMember(Order = 23)]
+        public ShelfMouseTrigger ShelfMouseButton { get; set; } = ShelfMouseTrigger.MiddleButton;
+
+        [DataMember(Order = 24)]
+        public bool ShelfMouseRequireCtrl { get; set; } = true;
+
+        [DataMember(Order = 25)]
+        public bool ShelfMouseRequireAlt { get; set; } = false;
+
+        [DataMember(Order = 26)]
+        public bool ShelfMouseRequireShift { get; set; } = false;
+
+        [DataMember(Order = 27)]
+        public bool ShelfCloseOnLaunch { get; set; } = true;
+
+        [DataMember(Order = 28)]
+        public bool ShelfCloseOnClickOutside { get; set; } = true;
+
+        [DataMember(Order = 29)]
+        public int ShelfBottomColumns { get; set; } = 3;
+
+        [DataMember(Order = 30)]
+        public int ShelfBottomMaxRows { get; set; } = 2;
+
+        [DataMember(Order = 31)]
+        public int ShelfBottomIconSize { get; set; } = 20;
+
+        [DataMember(Order = 32)]
+        public BinFlyoutDensity ShelfBottomDensity { get; set; } = BinFlyoutDensity.Normal;
+
+        [DataMember(Order = 33)]
+        public bool ShelfBottomShowLabels { get; set; } = true;
+
         public AppConfig()
         {
             SetFieldDefaults();
@@ -201,6 +264,20 @@ namespace WinBins.Models
             ActiveProfileId = string.Empty;
             ShowLiveWindowThumbnails = true;
             SendDiagnosticsAndUsage = true;
+            ShelfEnabled = false;
+            ShelfLayout = ShelfLayoutMode.List;
+            ShelfHotkey = string.Empty;
+            ShelfMouseButton = ShelfMouseTrigger.MiddleButton;
+            ShelfMouseRequireCtrl = true;
+            ShelfMouseRequireAlt = false;
+            ShelfMouseRequireShift = false;
+            ShelfCloseOnLaunch = true;
+            ShelfCloseOnClickOutside = true;
+            ShelfBottomColumns = 3;
+            ShelfBottomMaxRows = 2;
+            ShelfBottomIconSize = 20;
+            ShelfBottomDensity = BinFlyoutDensity.Normal;
+            ShelfBottomShowLabels = true;
         }
 
         public void EnsureDefaults()
@@ -218,11 +295,18 @@ namespace WinBins.Models
             if (HoverOpenDelayMs < 100) HoverOpenDelayMs = 100;
             if (HoverOpenDelayMs > 1500) HoverOpenDelayMs = 1500;
             if (GlobalSearchHotkey == null) GlobalSearchHotkey = string.Empty;
+            if (ShelfHotkey == null) ShelfHotkey = string.Empty;
             if (ActiveProfileId == null) ActiveProfileId = string.Empty;
             if (FlyoutOpacityPercent < 15) FlyoutOpacityPercent = 15;
             if (FlyoutOpacityPercent > 100) FlyoutOpacityPercent = 100;
             if (TileIconSize < 24) TileIconSize = 24;
             if (TileIconSize > 48) TileIconSize = 48;
+            if (ShelfBottomColumns < 2) ShelfBottomColumns = 2;
+            if (ShelfBottomColumns > 8) ShelfBottomColumns = 8;
+            if (ShelfBottomMaxRows < 1) ShelfBottomMaxRows = 1;
+            if (ShelfBottomMaxRows > 6) ShelfBottomMaxRows = 6;
+            if (ShelfBottomIconSize < 16) ShelfBottomIconSize = 16;
+            if (ShelfBottomIconSize > 32) ShelfBottomIconSize = 32;
 
             // Keep legacy UseAcrylicFlyout in sync with FlyoutBackdrop
             if (!UseAcrylicFlyout && FlyoutBackdrop == BinBackdropStyle.Acrylic)
@@ -348,6 +432,15 @@ namespace WinBins.Models
         [DataMember(Order = 33)]
         public bool ShowItemLabels { get; set; }
 
+        [DataMember(Order = 34)]
+        public bool IncludeInShelf { get; set; }
+
+        [DataMember(Order = 35)]
+        public bool ShelfShowItemsAtRoot { get; set; }
+
+        [DataMember(Order = 36)]
+        public ShelfBinPlacement ShelfPlacement { get; set; }
+
         public BinGroup()
         {
             SetFieldDefaults();
@@ -394,6 +487,9 @@ namespace WinBins.Models
             ShowNotificationBadges = true;
             ShowFlyoutLaunchAllButton = false;
             ShowItemLabels = true;
+            IncludeInShelf = false;
+            ShelfShowItemsAtRoot = false;
+            ShelfPlacement = ShelfBinPlacement.Submenu;
         }
 
         public void EnsureDefaults()
@@ -429,6 +525,11 @@ namespace WinBins.Models
             if (Items == null)
             {
                 Items = new List<BinItem>();
+            }
+
+            if (ShelfShowItemsAtRoot && ShelfPlacement == ShelfBinPlacement.Submenu)
+            {
+                ShelfPlacement = ShelfBinPlacement.TopLevel;
             }
 
             foreach (var item in Items)

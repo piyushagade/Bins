@@ -80,6 +80,7 @@
     <Compile Include="Services\ShortcutService.cs" />
     <Compile Include="Services\JumpListService.cs" />
     <Compile Include="Services\GlobalHotkeyManager.cs" />
+    <Compile Include="Services\ShelfTriggerManager.cs" />
     <Compile Include="Services\BackupSyncService.cs" />
     <Compile Include="Services\AnalyticsService.cs" />
     <Compile Include="Services\UpdateCheckService.cs" />
@@ -97,6 +98,7 @@
     <Compile Include="Views\AddUrlDialogWindow.cs" />
     <Compile Include="Views\ItemPropertiesDialogWindow.cs" />
     <Compile Include="Views\OmniSearchWindow.cs" />
+    <Compile Include="Views\ShelfWindow.cs" />
     <Compile Include="Views\TaskbarPinGuideDialog.cs" />
     <Compile Include="Views\MainWindow.cs" />
   </ItemGroup>
